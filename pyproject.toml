@@ -1,0 +1,29 @@
+[project]
+name = "a-share-agent"
+version = "0.1.0"
+description = "A-Share financial analysis agent powered by LangGraph and DeepSeek"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-deepseek>=0.1.0",
+    "langchain-core>=0.3.0",
+    "langchain>=0.3.0",
+    "pandas>=2.0.0",
+    "stock-data",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent"]
+
+[tool.uv]
+dev-dependencies = [
+    "langgraph-cli[inmem]>=0.1.0",
+]
+
+[tool.uv.sources]
+stock-data = { path = "../stock_data", editable = true }
