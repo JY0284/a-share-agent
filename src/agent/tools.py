@@ -16,7 +16,11 @@ from langchain_core.tools import tool
 
 from stock_data.agent_tools import (
     get_daily_basic,
+    get_daily_adj_prices,
     get_daily_prices,
+    get_weekly_prices,
+    get_monthly_prices,
+    get_adj_factor,
     get_stock_basic_detail,
     get_stock_company,
     get_universe,
@@ -24,6 +28,10 @@ from stock_data.agent_tools import (
     get_prev_trade_date,
     get_trading_days,
     is_trading_day,
+    get_stk_limit,
+    get_suspend_d,
+    get_new_share,
+    get_namechange,
     list_industries,
     resolve_symbol,
     search_stocks,
@@ -47,22 +55,30 @@ def tool_search_stocks(
     offset: int = 0,
     limit: int = 20,
 ) -> dict:
-    """Search for stocks by name, symbol, code, or industry (fuzzy matching).
-    
-    This is the PRIMARY tool for finding stocks. Use this FIRST when user 
-    mentions any stock name, keyword, or partial code.
-    
+    """Search for stocks by name, symbol, code, or industry keyword (fuzzy matching).
+
+    This is the PRIMARY entry point when the user mentions a stock name / keyword / partial code.
+
+    **Related-stocks workflow (important):**
+    - 1) Use this tool to get a few *seed* matches (e.g., the target company + close variants).
+    - 2) If the user asks for "相关/同概念/同类" stocks, DON'T stop here:
+        - Use `tool_list_industries` to discover the most relevant 行业 keywords.
+        - Then use `tool_get_universe(industry=...)` (optionally market/area/exchange filters) to list more
+          related stocks in that 行业, with pagination.
+        - Use `tool_get_stock_company` / `tool_get_stock_basic_detail` to verify business lines when the
+          theme is ambiguous (e.g., “卫星/航天/军工”, “AI/算力/半导体”).
+
     Examples:
-        - query="卫星" → finds stocks with "卫星" in name/industry
-        - query="银行" → finds all bank stocks
+        - query="卫星" → finds stocks with "卫星" in name/industry (good for seeds)
+        - query="银行" → finds bank stocks; for a complete list, prefer `tool_get_universe(industry="银行")`
         - query="300888" → finds stock by code
         - query="茅台" → finds 贵州茅台
-    
+
     Args:
         query: Search term (Chinese name, symbol, ts_code, or industry keyword)
         offset: Skip first N results (for pagination)
         limit: Max results per page (default 20, max 100)
-    
+
     Returns: {rows: [...], total_count: N, showing: "1-20", has_more: bool}
     """
     return search_stocks(query, offset=offset, limit=limit, store_dir=STORE_DIR)
@@ -158,14 +174,38 @@ def tool_get_universe(
 # =============================================================================
 
 
+def _effective_limit(
+    limit: int | None,
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    default_recent: int,
+    default_range: int,
+    max_limit: int,
+) -> int:
+    """Choose a reasonable page size for agent-facing tools.
+
+    - If the caller explicitly sets `limit`, respect it (clamped to max_limit).
+    - If a date range is provided, default to a larger page size.
+    - Otherwise default to a small "recent rows" lookup size.
+    """
+    if limit is None:
+        limit = default_range if (start_date or end_date) else default_recent
+    limit = int(limit)
+    if limit <= 0:
+        limit = default_recent
+    return min(limit, max_limit)
+
+
 @tool
 def tool_get_daily_prices(
     ts_code: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    limit: int = 10,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> dict:
-    """Get recent daily prices for a stock (simple lookup, no calculation).
+    """Get daily prices for a stock (supports date range + pagination).
     
     Use for simple queries like "获取茅台最近的股价" or "最近5天收盘价".
     For complex analysis (MA, trends, comparisons), use tool_execute_python instead.
@@ -177,15 +217,24 @@ def tool_get_daily_prices(
         ts_code: Stock ts_code (e.g., '600519.SH')
         start_date: Start date YYYYMMDD (optional)
         end_date: End date YYYYMMDD (optional)
-        limit: Max rows (default 10, max 50 for simple lookup)
+        offset: Skip first N rows (for pagination)
+        limit: Max rows. If omitted and a date range is provided, returns a larger page.
     
     Returns: {rows: [...], total_count, showing, has_more}
     """
-    limit = min(limit or 10, 50)  # Cap at 50 for simple queries
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=10,
+        default_range=200,
+        max_limit=200,
+    )
     return get_daily_prices(
         ts_code,
         start_date=start_date,
         end_date=end_date,
+        offset=offset,
         limit=limit,
         store_dir=STORE_DIR,
     )
@@ -196,9 +245,10 @@ def tool_get_daily_basic(
     ts_code: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    limit: int = 10,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> dict:
-    """Get recent daily valuation metrics for a stock (simple lookup).
+    """Get daily valuation metrics for a stock (supports date range + pagination).
     
     Use for simple queries like "茅台的PE是多少" or "获取最新估值数据".
     For complex analysis (PE comparisons, trend), use tool_execute_python instead.
@@ -209,18 +259,242 @@ def tool_get_daily_basic(
         ts_code: Stock ts_code (e.g., '600519.SH')
         start_date: Start date YYYYMMDD
         end_date: End date YYYYMMDD
-        limit: Max rows (default 10, max 50 for simple lookup)
+        offset: Skip first N rows (for pagination)
+        limit: Max rows. If omitted and a date range is provided, returns a larger page.
     
     Returns: {rows: [...], total_count, showing, has_more}
     """
-    limit = min(limit or 10, 50)  # Cap at 50 for simple queries
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=10,
+        default_range=200,
+        max_limit=200,
+    )
     return get_daily_basic(
         ts_code,
         start_date=start_date,
         end_date=end_date,
+        offset=offset,
         limit=limit,
         store_dir=STORE_DIR,
     )
+
+
+@tool
+def tool_get_daily_adj_prices(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    how: str = "qfq",
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get adjusted daily prices (supports date range + pagination).
+
+    Args:
+        ts_code: Stock ts_code (e.g., '600519.SH')
+        start_date: Start date YYYYMMDD (optional)
+        end_date: End date YYYYMMDD (optional)
+        how: 'qfq' (forward), 'hfq' (backward), or 'both'
+        offset: Skip first N rows (for pagination)
+        limit: Max rows. If omitted and a date range is provided, returns a larger page.
+    """
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=30,
+        default_range=200,
+        max_limit=200,
+    )
+    return get_daily_adj_prices(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        how=how,  # type: ignore[arg-type]
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_weekly_prices(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get weekly prices (supports date range + pagination)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=20,
+        default_range=100,
+        max_limit=100,
+    )
+    return get_weekly_prices(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_monthly_prices(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get monthly prices (supports date range + pagination)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=12,
+        default_range=60,
+        max_limit=60,
+    )
+    return get_monthly_prices(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_adj_factor(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get adjustment factors (supports date range + pagination)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=30,
+        default_range=200,
+        max_limit=200,
+    )
+    return get_adj_factor(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_stk_limit(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get limit-up/limit-down prices (supports date range + pagination)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=30,
+        default_range=200,
+        max_limit=200,
+    )
+    return get_stk_limit(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_suspend_d(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get suspension/resumption events (supports date range + pagination)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=30,
+        default_range=100,
+        max_limit=100,
+    )
+    return get_suspend_d(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_new_share(
+    year: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    ts_code: str | None = None,
+    symbol_or_sub_code: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get IPO / new share info (supports date range + pagination)."""
+    # Here "date range" is the common query path, so default to a larger page.
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=20,
+        default_range=100,
+        max_limit=100,
+    )
+    return get_new_share(
+        year=year,
+        start_date=start_date,
+        end_date=end_date,
+        ts_code=ts_code,
+        symbol_or_sub_code=symbol_or_sub_code,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_namechange(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    """Get name change history (supports date range filtering)."""
+    return get_namechange(ts_code, start_date=start_date, end_date=end_date, store_dir=STORE_DIR)
 
 
 # =============================================================================
@@ -337,77 +611,67 @@ def tool_get_next_trade_date(date: str) -> dict:
 
 @tool
 def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict:
-    """Execute Python code for data analysis and calculations.
+    """Execute Python code for DATA ANALYSIS and CALCULATIONS only.
     
-    This is the MAIN tool for analyzing stock data. You have full access to:
+    ⚠️ IMPORTANT: This tool is for COMPUTING with data, NOT for generating text!
+    
+    ## FORBIDDEN - Do NOT write code like this:
+    ```python
+    # ❌ WRONG: Print-only code without using store
+    print("=== 分析报告 ===")
+    print("1. 公司主营业务：xxx")
+    print("2. 竞争优势：xxx")
+    ```
+    This is a MISUSE of the Python tool. If you want to explain something,
+    just respond in text directly - don't wrap it in print statements!
+    
+    ## REQUIRED - Your code MUST:
+    1. Use `store` to load actual data from the database
+    2. Perform real calculations (rolling, groupby, comparisons, etc.)
+    3. Output computed results, not hand-written text
+    
+    ## Before Using This Tool
+    1. First call `tool_search_skills(query)` to find relevant coding patterns
+    2. Load useful skills with `tool_load_skill(skill_id)`
+    3. Apply skill guidance in your code
+    4. Pass `skills_used=[skill_id, ...]` when calling this tool
     
     ## Pre-loaded Libraries
     - `pd` / `pandas`: Data manipulation
     - `np` / `numpy`: Numerical computation  
     - `plt` / `matplotlib.pyplot`: Plotting (if needed)
     
-    ## Stock Data Access
-    - `store`: StockStore instance with these methods:
-    
-    ### Price Data (returns pandas DataFrame)
+    ## Stock Data Access via `store`
     ```python
-    # Daily prices (OHLCV + pct_chg)
+    # Price data
     df = store.daily(ts_code, start_date=None, end_date=None)
+    df = store.daily_adj(ts_code, how="qfq")  # Adjusted prices
+    df = store.weekly(ts_code)
+    df = store.monthly(ts_code)
     
-    # Adjusted prices (qfq=forward, hfq=backward)
-    df = store.daily_adj(ts_code, start_date=None, end_date=None, how="qfq")
+    # Valuation data
+    df = store.daily_basic(ts_code)  # pe_ttm, pb, total_mv, circ_mv
     
-    # Weekly/monthly prices
-    df = store.weekly(ts_code, start_date=None, end_date=None)
-    df = store.monthly(ts_code, start_date=None, end_date=None)
-    ```
-    
-    ### Valuation Data
-    ```python
-    # Daily metrics: pe_ttm, pb, total_mv, circ_mv, turnover_rate, etc.
-    df = store.daily_basic(ts_code, start_date=None, end_date=None)
-    ```
-    
-    ### Other Data
-    ```python
-    # Stock basic info
-    df = store.stock_basic(ts_code=None, symbol=None)
-    
-    # Company profile  
+    # Other
+    df = store.stock_basic(ts_code=ts_code)
     df = store.stock_company(ts_code=ts_code)
-    
-    # Trading calendar
     days = store.trading_days(start_date, end_date)
-    
-    # Adjustment factors
-    df = store.adj_factor(ts_code, start_date=None, end_date=None)
-    
-    # Suspension events
-    df = store.suspend_d(ts_code, start_date=None, end_date=None)
-    
-    # Limit up/down prices
-    df = store.stk_limit(ts_code, start_date=None, end_date=None)
     ```
     
-    ## Tips
-    1. Use `print()` to show intermediate results
-    2. Assign final result to `result` variable for clean output
-    3. DataFrames are sorted by trade_date ascending by default
-    4. Date format is YYYYMMDD string (e.g., "20240101")
-    5. ts_code format is "symbol.exchange" (e.g., "600519.SH", "000001.SZ")
-    
-    ## Example: Calculate 20-day moving average
+    ## Good Example: Calculate MA and find golden cross
     ```python
     df = store.daily("600519.SH", start_date="20240101")
     df = df.sort_values("trade_date")
+    df["ma5"] = df["close"].rolling(5).mean()
     df["ma20"] = df["close"].rolling(20).mean()
-    result = df[["trade_date", "close", "ma20"]].tail(10)
+    df["golden_cross"] = (df["ma5"] > df["ma20"]) & (df["ma5"].shift(1) <= df["ma20"].shift(1))
+    result = df[df["golden_cross"]][["trade_date", "close", "ma5", "ma20"]]
     print(result)
     ```
     
-    ## Example: Compare PE ratios of multiple stocks
+    ## Good Example: Compare PE ratios
     ```python
-    stocks = ["600519.SH", "000858.SZ", "000568.SZ"]  # 白酒三巨头
+    stocks = ["600519.SH", "000858.SZ", "000568.SZ"]
     results = []
     for ts_code in stocks:
         basic = store.daily_basic(ts_code).tail(1)
@@ -415,24 +679,18 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
             results.append({
                 "ts_code": ts_code,
                 "pe_ttm": basic["pe_ttm"].values[0],
-                "pb": basic["pb"].values[0],
-                "total_mv": basic["total_mv"].values[0] / 10000  # 亿元
+                "total_mv(亿)": basic["total_mv"].values[0] / 10000
             })
     result = pd.DataFrame(results)
     print(result)
     ```
     
     Args:
-        code: Python code to execute. Use print() for output, assign to `result` for return value.
+        code: Python code that uses `store` to load and analyze data.
+        skills_used: List of skill IDs that guided this code (from tool_search_skills/tool_load_skill).
     
     Returns:
-        {
-            "success": bool,
-            "output": str,       # stdout from print()
-            "error": str | None, # error message if failed
-            "result": str,       # formatted result value
-            "skills_used": list[str]  # names/ids of skills used to produce this code
-        }
+        {"success": bool, "output": str, "error": str|None, "result": str, "skills_used": list}
     """
     out = execute_python(code)
     out["skills_used"] = skills_used or []
@@ -453,7 +711,15 @@ ALL_TOOLS = [
     tool_get_universe,
     # Simple Data (for basic lookups, no calculation)
     tool_get_daily_prices,
+    tool_get_daily_adj_prices,
     tool_get_daily_basic,
+    tool_get_weekly_prices,
+    tool_get_monthly_prices,
+    tool_get_adj_factor,
+    tool_get_stk_limit,
+    tool_get_suspend_d,
+    tool_get_new_share,
+    tool_get_namechange,
     # Calendar
     tool_get_trading_days,
     tool_is_trading_day,
