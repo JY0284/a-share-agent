@@ -27,6 +27,7 @@ from stock_data.agent_tools import (
 )
 
 from agent.sandbox import execute_python
+from agent.skills import list_skills, load_skill, search_skills
 
 # Get store directory from environment or use default
 STORE_DIR = os.environ.get("STOCK_DATA_STORE_DIR", "../stock_data/store")
@@ -114,6 +115,53 @@ def tool_get_stock_company(ts_code: str) -> dict:
     """
     return get_stock_company(ts_code, store_dir=STORE_DIR)
 
+@tool
+def tool_list_skills() -> dict:
+    """List available agent skills from a-share-agent/skills/*/experience.md.
+
+    Returns a lightweight list: name, description, tags, and skill_id (directory name).
+    """
+    skills = list_skills()
+    rows = []
+    for s in skills:
+        rows.append(
+            {
+                "skill_id": s.path.parent.name,
+                "name": s.name,
+                "description": s.description,
+                "tags": s.tags,
+            }
+        )
+    return {"rows": rows, "count": len(rows)}
+
+
+@tool
+def tool_search_skills(query: str, limit: int = 5) -> dict:
+    """Search skills relevant to a query (used before Python execution).
+
+    Args:
+        query: User question or subtask
+        limit: Max skills to return (recommend 1-3 for injection)
+    """
+    hits = search_skills(query, k=limit)
+    rows = []
+    for s in hits:
+        rows.append(
+            {
+                "skill_id": s.path.parent.name,
+                "name": s.name,
+                "description": s.description,
+                "tags": s.tags,
+            }
+        )
+    return {"query": query, "rows": rows, "count": len(rows)}
+
+
+@tool
+def tool_load_skill(skill_id: str) -> dict:
+    """Load full skill content (frontmatter + markdown body)."""
+    return load_skill(skill_id)
+
 
 # =============================================================================
 # CALENDAR TOOLS - For trading day queries
@@ -175,7 +223,7 @@ def tool_get_next_trade_date(date: str) -> dict:
 
 
 @tool
-def tool_execute_python(code: str) -> dict:
+def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict:
     """Execute Python code for data analysis and calculations.
     
     This is the MAIN tool for analyzing stock data. You have full access to:
@@ -270,9 +318,12 @@ def tool_execute_python(code: str) -> dict:
             "output": str,       # stdout from print()
             "error": str | None, # error message if failed
             "result": str,       # formatted result value
+            "skills_used": list[str]  # names/ids of skills used to produce this code
         }
     """
-    return execute_python(code)
+    out = execute_python(code)
+    out["skills_used"] = skills_used or []
+    return out
 
 
 # =============================================================================
@@ -283,6 +334,9 @@ ALL_TOOLS = [
     # Discovery (use these first!)
     tool_search_stocks,
     tool_list_industries,
+    tool_list_skills,
+    tool_search_skills,
+    tool_load_skill,
     tool_resolve_symbol,
     tool_get_stock_basic_detail,
     tool_get_stock_company,
