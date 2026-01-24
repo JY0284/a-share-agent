@@ -59,7 +59,21 @@ def main() -> None:
 
         ts = ev.get("ts")
         et = ev.get("event")
-        if et in ("tool_start", "tool_end"):
+        if et == "message":
+            direction = ev.get("direction")
+            mtype = ev.get("message_type")
+            print(f"[message:{direction}] {mtype} ts={ts}")
+            if ev.get("tool_calls"):
+                print("  tool_calls:", ev.get("tool_calls"))
+            if ev.get("tool_call_id"):
+                print("  tool_call_id:", ev.get("tool_call_id"))
+            content = ev.get("content")
+            if isinstance(content, str):
+                snippet = content if len(content) <= 600 else (content[:600] + "...")
+                print("  content:", snippet)
+            else:
+                print("  content:", content)
+        elif et in ("tool_start", "tool_end"):
             print(f"[{et}] tool={ev.get('tool_name')} id={ev.get('tool_call_id')} ts={ts}")
             if et == "tool_start":
                 print("  args:", ev.get("args"))
