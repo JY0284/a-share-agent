@@ -241,6 +241,49 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
 
         return resp
 
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Any],
+    ) -> ModelResponse:
+        """Async version of wrap_model_call for async agent execution contexts."""
+        run_id = self._trace_id(request.runtime, state=getattr(request, "state", None))
+        try:
+            if request.messages:
+                self._writer.write_event(
+                    run_id,
+                    _message_event(request.messages[-1], direction="in"),
+                )
+            self._writer.write_event(
+                run_id,
+                {
+                    "event": "model_start",
+                    "model": getattr(request.model, "model", None) or request.model.__class__.__name__,
+                    "tool_count": len(request.tools or []),
+                    "messages_preview": _safe_messages_preview(request.messages),
+                },
+            )
+        except Exception:
+            pass
+
+        resp = await handler(request)
+
+        try:
+            self._writer.write_event(
+                run_id,
+                {
+                    "event": "model_end",
+                    "result_preview": _safe_messages_preview(resp.result),
+                    "structured_response": resp.structured_response,
+                },
+            )
+            for m in resp.result:
+                self._writer.write_event(run_id, _message_event(m, direction="out"))
+        except Exception:
+            pass
+
+        return resp
+
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
@@ -289,6 +332,60 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             # Also record the tool message as a message event (so message stream is complete)
             if isinstance(result, ToolMessage):
                 # Use truncated content to avoid huge files
+                msg_ev = _message_event(result, direction="out")
+                if isinstance(msg_ev.get("content"), str) and len(msg_ev["content"]) > self._max_payload_chars:
+                    msg_ev["content"] = msg_ev["content"][: self._max_payload_chars] + "..."
+                self._writer.write_event(run_id, msg_ev)
+        except Exception:
+            pass
+
+        return result
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Any],
+    ) -> Any:
+        """Async version of wrap_tool_call for async agent execution contexts."""
+        runtime = getattr(request, "runtime", None)
+        run_id = self._trace_id(runtime, state=getattr(request, "state", None))
+        tool_call = request.tool_call or {}
+        name = tool_call.get("name")
+        args = tool_call.get("args")
+        tool_call_id = tool_call.get("id") or getattr(runtime, "tool_call_id", None)
+
+        try:
+            self._writer.write_event(
+                run_id,
+                {
+                    "event": "tool_start",
+                    "tool_name": name,
+                    "tool_call_id": tool_call_id,
+                    "args": args,
+                },
+            )
+        except Exception:
+            pass
+
+        result = await handler(request)
+
+        try:
+            content = getattr(result, "content", result)
+            content_str = content if isinstance(content, str) else str(content)
+            if len(content_str) > self._max_payload_chars:
+                content_str = content_str[: self._max_payload_chars] + "..."
+
+            self._writer.write_event(
+                run_id,
+                {
+                    "event": "tool_end",
+                    "tool_name": name,
+                    "tool_call_id": tool_call_id,
+                    "result_preview": content_str,
+                },
+            )
+
+            if isinstance(result, ToolMessage):
                 msg_ev = _message_event(result, direction="out")
                 if isinstance(msg_ev.get("content"), str) and len(msg_ev["content"]) > self._max_payload_chars:
                     msg_ev["content"] = msg_ev["content"][: self._max_payload_chars] + "..."
