@@ -131,6 +131,11 @@ df = store.daily(ts_code)           # Daily prices
 df = store.daily_basic(ts_code)     # Valuation metrics
 df = store.daily_adj(ts_code, how="qfq")  # Adjusted prices
 
+# ⚠️ IMPORTANT: store methods do NOT accept 'limit' parameter!
+# If you need to limit rows, use .tail(n) or .head(n) after loading:
+df = store.daily_basic(ts_code).tail(10)  # ✅ CORRECT
+# df = store.daily_basic(ts_code, limit=10)  # ❌ WRONG - causes error!
+
 # Always sort by date
 df = df.sort_values("trade_date")
 
@@ -140,6 +145,11 @@ df["ma20"] = df["close"].rolling(20).mean()
 # Print results
 print(result.to_string(index=False))
 ```
+
+**⚠️ Tool API vs Store API:**
+- Tools like `tool_get_daily_basic(ts_code, limit=10)` accept `limit`
+- Store methods like `store.daily_basic(ts_code)` do NOT accept `limit`
+- To limit rows with store, use `.tail(n)` or `.head(n)` after loading data
 
 ## Response Guidelines
 

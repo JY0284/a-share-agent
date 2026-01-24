@@ -658,11 +658,27 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     
     # Valuation data
     df = store.daily_basic(ts_code)  # pe_ttm, pb, total_mv, circ_mv
+    # ⚠️ IMPORTANT: store.daily_basic() does NOT accept 'limit' parameter!
+    # If you need to limit rows, use: df.tail(n) or df.head(n) after loading
     
     # Other
     df = store.stock_basic(ts_code=ts_code)
     df = store.stock_company(ts_code=ts_code)
     days = store.trading_days(start_date, end_date)
+    ```
+    
+    ## ⚠️ CRITICAL: Tool API vs Store API
+    **DO NOT confuse tool parameters with store method parameters!**
+    - `tool_get_daily_basic(ts_code, limit=10)` ← Tool accepts 'limit'
+    - `store.daily_basic(ts_code)` ← Store method does NOT accept 'limit'
+    
+    If you need to limit rows when using store, do it AFTER loading:
+    ```python
+    # ✅ CORRECT
+    df = store.daily_basic(ts_code).tail(10)  # Get last 10 rows
+    
+    # ❌ WRONG - will cause error!
+    df = store.daily_basic(ts_code, limit=10)  # ERROR: unexpected keyword argument 'limit'
     ```
     
     ## Good Example: Calculate MA and find golden cross
@@ -730,8 +746,8 @@ ALL_TOOLS = [
     # Calendar
     tool_get_trading_days,
     tool_is_trading_day,
-    tool_get_prev_trade_date,
-    tool_get_next_trade_date,
+    # tool_get_prev_trade_date,
+    # tool_get_next_trade_date,
     # Skills (for Python execution)
     tool_list_skills,
     tool_search_skills,
