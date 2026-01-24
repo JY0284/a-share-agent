@@ -32,3 +32,6 @@ Thumbs.db
 # Traces
 traces/
 .langgraph_api/
+
+# Account
+pricing.json
