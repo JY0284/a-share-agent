@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import TodoListMiddleware
 from langchain_deepseek import ChatDeepSeek
 
 from agent.prompts import get_system_prompt
@@ -23,4 +24,5 @@ graph = create_agent(
     model=model,
     tools=ALL_TOOLS,
     system_prompt=get_system_prompt(),
+    middleware=[TodoListMiddleware()]
 )
