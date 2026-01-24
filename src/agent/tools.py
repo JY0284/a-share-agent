@@ -611,9 +611,16 @@ def tool_get_next_trade_date(date: str) -> dict:
 
 @tool
 def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict:
-    """Execute Python code for DATA ANALYSIS and CALCULATIONS only.
+    """Execute Python code for CALCULATIONS that other tools CANNOT do.
     
-    ⚠️ IMPORTANT: This tool is for COMPUTING with data, NOT for generating text!
+    ⚠️ THIS IS A LAST RESORT TOOL - only use when other tools cannot answer!
+    
+    - "最近股价" → use tool_get_daily_prices, NOT Python
+    - "最近一个月股价" → use tool_get_daily_prices(start_date=...), NOT Python
+    - "PE是多少" → use tool_get_daily_basic, NOT Python
+    - "公司主营业务" → use tool_get_stock_company, NOT Python
+    
+    Only use Python when you need to COMPUTE (rolling, groupby, compare, rank, etc.)!
     
     ## FORBIDDEN - Do NOT write code like this:
     ```python
