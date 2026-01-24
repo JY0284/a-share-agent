@@ -28,3 +28,7 @@ Thumbs.db
 # LangGraph
 .langgraph/
 .langgraph_api/
+
+# Traces
+traces/
+.langgraph_api/

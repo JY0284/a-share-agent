@@ -9,6 +9,7 @@ from langchain.agents.middleware import TodoListMiddleware
 from langchain_deepseek import ChatDeepSeek
 
 from agent.prompts import get_system_prompt
+from agent.trace_middleware import LocalTraceMiddleware
 from agent.tools import ALL_TOOLS
 
 # Initialize the DeepSeek model
@@ -24,5 +25,5 @@ graph = create_agent(
     model=model,
     tools=ALL_TOOLS,
     system_prompt=get_system_prompt(),
-    middleware=[TodoListMiddleware()]
+    middleware=[LocalTraceMiddleware(), TodoListMiddleware()],
 )
