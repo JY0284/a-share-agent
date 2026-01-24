@@ -15,8 +15,11 @@ import os
 from langchain_core.tools import tool
 
 from stock_data.agent_tools import (
+    get_daily_basic,
+    get_daily_prices,
     get_stock_basic_detail,
     get_stock_company,
+    get_universe,
     get_next_trade_date,
     get_prev_trade_date,
     get_trading_days,
@@ -114,6 +117,116 @@ def tool_get_stock_company(ts_code: str) -> dict:
     Returns: {found: bool, data: {...company info...}}
     """
     return get_stock_company(ts_code, store_dir=STORE_DIR)
+
+
+@tool
+def tool_get_universe(
+    exchange: str | None = None,
+    market: str | None = None,
+    industry: str | None = None,
+    area: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict:
+    """Get filtered universe of listed stocks with pagination.
+    
+    Use for queries like "列出银行股" or "深圳创业板有哪些股票".
+    
+    Args:
+        exchange: 'SSE' (Shanghai) or 'SZSE' (Shenzhen)
+        market: '主板', '创业板', '科创板', 'CDR'
+        industry: Industry name (use tool_list_industries to see options)
+        area: Province (e.g., '北京', '广东')
+        offset: Skip first N rows
+        limit: Max rows (default 20, max 100)
+    
+    Returns: {rows: [ts_code, name, industry, market], total_count, showing, has_more}
+    """
+    return get_universe(
+        exchange=exchange,
+        market=market,
+        industry=industry,
+        area=area,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+# =============================================================================
+# SIMPLE DATA TOOLS - For basic price/valuation lookups (no calculation needed)
+# =============================================================================
+
+
+@tool
+def tool_get_daily_prices(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """Get recent daily prices for a stock (simple lookup, no calculation).
+    
+    Use for simple queries like "获取茅台最近的股价" or "最近5天收盘价".
+    For complex analysis (MA, trends, comparisons), use tool_execute_python instead.
+    
+    Returns most recent data first (descending by date).
+    Columns: trade_date, open, high, low, close, vol, pct_chg
+    
+    Args:
+        ts_code: Stock ts_code (e.g., '600519.SH')
+        start_date: Start date YYYYMMDD (optional)
+        end_date: End date YYYYMMDD (optional)
+        limit: Max rows (default 10, max 50 for simple lookup)
+    
+    Returns: {rows: [...], total_count, showing, has_more}
+    """
+    limit = min(limit or 10, 50)  # Cap at 50 for simple queries
+    return get_daily_prices(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_daily_basic(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """Get recent daily valuation metrics for a stock (simple lookup).
+    
+    Use for simple queries like "茅台的PE是多少" or "获取最新估值数据".
+    For complex analysis (PE comparisons, trend), use tool_execute_python instead.
+    
+    Columns: trade_date, pe_ttm, pb, total_mv, circ_mv, turnover_rate
+    
+    Args:
+        ts_code: Stock ts_code (e.g., '600519.SH')
+        start_date: Start date YYYYMMDD
+        end_date: End date YYYYMMDD
+        limit: Max rows (default 10, max 50 for simple lookup)
+    
+    Returns: {rows: [...], total_count, showing, has_more}
+    """
+    limit = min(limit or 10, 50)  # Cap at 50 for simple queries
+    return get_daily_basic(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+# =============================================================================
+# SKILLS TOOLS - For discovering and loading agent skills
+# =============================================================================
+
 
 @tool
 def tool_list_skills() -> dict:
@@ -334,17 +447,22 @@ ALL_TOOLS = [
     # Discovery (use these first!)
     tool_search_stocks,
     tool_list_industries,
-    tool_list_skills,
-    tool_search_skills,
-    tool_load_skill,
     tool_resolve_symbol,
     tool_get_stock_basic_detail,
     tool_get_stock_company,
+    tool_get_universe,
+    # Simple Data (for basic lookups, no calculation)
+    tool_get_daily_prices,
+    tool_get_daily_basic,
     # Calendar
     tool_get_trading_days,
     tool_is_trading_day,
     tool_get_prev_trade_date,
     tool_get_next_trade_date,
-    # Python Execution (main analysis tool)
+    # Skills (for Python execution)
+    tool_list_skills,
+    tool_search_skills,
+    tool_load_skill,
+    # Python Execution (for complex analysis only)
     tool_execute_python,
 ]
