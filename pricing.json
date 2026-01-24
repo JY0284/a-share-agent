@@ -1,0 +1,22 @@
+{
+  "$schema": "pricing config for LLM cost estimation",
+  "models": {
+    "deepseek-chat": {
+      "currency": "RMB",
+      "per_million_tokens": {
+        "input_cache_hit": 0.2,
+        "input_cache_miss": 2,
+        "output": 3
+      }
+    },
+    "deepseek-reasoner": {
+      "currency": "RMB",
+      "per_million_tokens": {
+        "input_cache_hit": 0.2,
+        "input_cache_miss": 2,
+        "output": 3
+      }
+    }
+  },
+  "default_model": "deepseek-chat"
+}

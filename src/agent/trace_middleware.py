@@ -18,6 +18,7 @@ from langchain.agents.middleware.types import (
 )
 
 from agent.trace import get_trace_writer
+from agent.usage_cost import compute_usage_and_cost
 
 TContext = TypeVar("TContext")
 TState = TypeVar("TState")
@@ -78,7 +79,111 @@ def _message_event(msg: BaseMessage, *, direction: str) -> dict[str, Any]:
     # ToolMessage has tool_call_id
     if isinstance(msg, ToolMessage):
         ev["tool_call_id"] = getattr(msg, "tool_call_id", None)
+    # Usage/cost (if present) for AI messages
+    if isinstance(msg, AIMessage):
+        # Prefer additional_kwargs since that's what gets serialized most reliably
+        ak = getattr(msg, "additional_kwargs", None)
+        if isinstance(ak, dict):
+            if ak.get("usage") is not None:
+                ev["usage"] = ak.get("usage")
+            if ak.get("cost") is not None:
+                ev["cost"] = ak.get("cost")
+        rm = getattr(msg, "response_metadata", None)
+        if isinstance(rm, dict):
+            if "usage" in rm and "usage" not in ev:
+                ev["usage"] = rm.get("usage")
+            if "cost" in rm and "cost" not in ev:
+                ev["cost"] = rm.get("cost")
     return ev
+
+
+def _attach_usage_cost(messages: list[BaseMessage], model_name: str | None) -> dict[str, Any] | None:
+    """Compute per-message usage/cost and attach onto AIMessage.additional_kwargs.
+
+    Returns aggregated usage/cost for this model call (or None if no usage found).
+    """
+    total_in = 0
+    total_out = 0
+    total_tokens = 0
+    total_cost = 0.0
+    currency: str | None = None
+    has_usage = False
+    has_cost = False
+
+    for m in messages:
+        if not isinstance(m, AIMessage):
+            continue
+
+        info = compute_usage_and_cost(m, model_name=model_name)
+        usage = info.get("usage")
+        cost = info.get("cost")
+
+        if usage:
+            has_usage = True
+            total_in += int(usage.get("input_tokens", 0) or 0)
+            total_out += int(usage.get("output_tokens", 0) or 0)
+            total_tokens += int(usage.get("total_tokens", 0) or 0)
+
+            # Attach to additional_kwargs (preferred for serialization)
+            ak = getattr(m, "additional_kwargs", None)
+            if not isinstance(ak, dict):
+                ak = {}
+                try:
+                    m.additional_kwargs = ak
+                except Exception:
+                    pass
+            if isinstance(ak, dict):
+                ak["usage"] = usage
+
+            # Also attach to response_metadata (best-effort)
+            rm = getattr(m, "response_metadata", None)
+            if not isinstance(rm, dict):
+                rm = {}
+                try:
+                    m.response_metadata = rm
+                except Exception:
+                    pass
+            if isinstance(rm, dict):
+                rm["usage"] = usage
+
+        if cost:
+            has_cost = True
+            currency = str(cost.get("currency") or currency or "USD")
+            total_cost += float(cost.get("total", 0) or 0)
+
+            ak = getattr(m, "additional_kwargs", None)
+            if not isinstance(ak, dict):
+                ak = {}
+                try:
+                    m.additional_kwargs = ak
+                except Exception:
+                    pass
+            if isinstance(ak, dict):
+                ak["cost"] = cost
+
+            rm = getattr(m, "response_metadata", None)
+            if not isinstance(rm, dict):
+                rm = {}
+                try:
+                    m.response_metadata = rm
+                except Exception:
+                    pass
+            if isinstance(rm, dict):
+                rm["cost"] = cost
+
+    if not has_usage:
+        return None
+
+    out: dict[str, Any] = {
+        "usage": {
+            "input_tokens": total_in,
+            "output_tokens": total_out,
+            "total_tokens": total_tokens,
+        }
+    }
+    if has_cost:
+        out["cost"] = {"currency": currency or "USD", "total": round(total_cost, 6)}
+    return out
 
 
 class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
@@ -222,15 +327,21 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         resp = handler(request)
 
         try:
+            # Get actual model name from the LLM config, falling back to None
+            # so estimate_cost uses usage["model"] from response metadata
+            model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
+            agg = _attach_usage_cost(resp.result, model_name=model_name)
+
+            model_end: dict[str, Any] = {
+                "event": "model_end",
+                "result_preview": _safe_messages_preview(resp.result),
+                "structured_response": resp.structured_response,
+            }
+            if agg:
+                model_end.update(agg)
+
             # response is list[BaseMessage]; preview for size
-            self._writer.write_event(
-                run_id,
-                {
-                    "event": "model_end",
-                    "result_preview": _safe_messages_preview(resp.result),
-                    "structured_response": resp.structured_response,
-                },
-            )
+            self._writer.write_event(run_id, model_end)
 
             # Log each outbound message from the model (usually AIMessage)
             for m in resp.result:
@@ -269,14 +380,20 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         resp = await handler(request)
 
         try:
-            self._writer.write_event(
-                run_id,
-                {
-                    "event": "model_end",
-                    "result_preview": _safe_messages_preview(resp.result),
-                    "structured_response": resp.structured_response,
-                },
-            )
+            # Get actual model name from the LLM config, falling back to None
+            # so estimate_cost uses usage["model"] from response metadata
+            model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
+            agg = _attach_usage_cost(resp.result, model_name=model_name)
+
+            model_end: dict[str, Any] = {
+                "event": "model_end",
+                "result_preview": _safe_messages_preview(resp.result),
+                "structured_response": resp.structured_response,
+            }
+            if agg:
+                model_end.update(agg)
+
+            self._writer.write_event(run_id, model_end)
             for m in resp.result:
                 self._writer.write_event(run_id, _message_event(m, direction="out"))
         except Exception:
