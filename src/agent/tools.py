@@ -746,8 +746,8 @@ ALL_TOOLS = [
     # Calendar
     tool_get_trading_days,
     tool_is_trading_day,
-    # tool_get_prev_trade_date,
-    # tool_get_next_trade_date,
+    tool_get_prev_trade_date,
+    tool_get_next_trade_date,
     # Skills (for Python execution)
     tool_list_skills,
     tool_search_skills,
