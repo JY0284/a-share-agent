@@ -18,6 +18,7 @@ from typing import Any
 # Pre-import common libraries for the sandbox
 import pandas as pd
 import numpy as np
+import scipy
 
 from stock_data.store import open_store
 
@@ -68,6 +69,7 @@ def execute_python(code: str, timeout_seconds: int = 60) -> dict[str, Any]:
         "np": np,
         "pandas": pd,
         "numpy": np,
+        "scipy": scipy,
         # Stock data
         "store": get_store(),
         "STORE_DIR": STORE_DIR,

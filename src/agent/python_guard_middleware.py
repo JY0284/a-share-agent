@@ -95,6 +95,7 @@ def _is_simple_lookup_query(q: str) -> bool:
 
 
 def _is_print_only_code(code: str) -> bool:
+    return False
     """Heuristic: code mostly prints / lists without computing anything meaningful."""
     lines = []
     for raw in (code or "").splitlines():
