@@ -43,11 +43,17 @@ STOCK_DATA_STORE_DIR=../stock_data/store
 
 ```bash
 cd a-share-agent
-source .venv/bin/activate
-langgraph dev --port 2024
+# Recommended (works on Windows/macOS/Linux):
+uv run langgraph dev --port 2024
 ```
 
-This starts the LangGraph server at `http://localhost:2024`.
+This starts the LangGraph server at `http://127.0.0.1:2024`.
+
+If the server prints the banner but the browser shows "not responding", try disabling hot reload:
+
+```bash
+uv run langgraph dev --port 2024 --no-reload
+```
 
 ### 4. Start the Chat UI (agent-chat-ui frontend)
 
