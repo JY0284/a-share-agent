@@ -236,7 +236,7 @@ class PythonGuardMiddleware(AgentMiddleware[Any, Any]):
                 tool_call_id,
                 "拒绝执行：使用 Python 进行分析前，必须先加载 1-3 个 skills，并在调用 tool_execute_python 时传入 skills_used。\n"
                 "建议流程：tool_search_skills(query=你的分析目标, limit=3) → tool_load_skill(...) → tool_execute_python(..., skills_used=[...])\n"
-                "如果不确定选哪个技能，至少加载 robust_df_checks + pandas_trade_date。",
+                "如果不确定选哪个技能，至少加载 robust_df_checks + trading_day_windows。",
             )
 
         # 2.5) Enforce that declared skills were actually loaded via tool_load_skill
@@ -293,7 +293,7 @@ class PythonGuardMiddleware(AgentMiddleware[Any, Any]):
                 tool_call_id,
                 "拒绝执行：使用 Python 进行分析前，必须先加载 1-3 个 skills，并在调用 tool_execute_python 时传入 skills_used。\n"
                 "建议流程：tool_search_skills(query=你的分析目标, limit=3) → tool_load_skill(...) → tool_execute_python(..., skills_used=[...])\n"
-                "如果不确定选哪个技能，至少加载 robust_df_checks + pandas_trade_date。",
+                "如果不确定选哪个技能，至少加载 robust_df_checks + trading_day_windows。",
             )
 
         loaded = _loaded_skills_in_state(getattr(request, "state", None))
