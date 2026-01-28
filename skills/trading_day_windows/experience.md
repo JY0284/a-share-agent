@@ -22,7 +22,32 @@ result = df[["trade_date", "close", "vol", "pct_chg"]]
 ```
 
 ## Notes
-- After loading data, use `pandas_trade_date` for sorting/slicing patterns and date formatting for display.
+- Always sort explicitly on `trade_date` and be clear about direction:
+  - Rolling/indicators: sort **ascending** then `rolling(...)`
+  - “最新N条”: sort **descending** then `head(N)`
+
+### Get most recent N rows (for display)
+
+```python
+df = store.daily(ts_code)
+df = df.sort_values("trade_date", ascending=False)
+recent = df.head(N)
+```
+
+### Get last N rows in chronological order (for rolling indicators)
+
+```python
+df = store.daily(ts_code, start_date=start_date, end_date=end_date)
+df = df.sort_values("trade_date", ascending=True)
+tail = df.tail(N)  # still chronological
+```
+
+### Convert trade_date for display (YYYY-MM-DD)
+
+```python
+out = recent.copy()
+out["trade_date"] = pd.to_datetime(out["trade_date"].astype(str), format="%Y%m%d").dt.strftime("%Y-%m-%d")
+```
 
 ## Common bugs to avoid
 - Using `.tail(N)` before sorting if you need “latest”.

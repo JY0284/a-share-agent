@@ -134,6 +134,12 @@ def _score_skill(query: str, skill: Skill) -> int:
 
     # Hand-tuned keyword boosts for common quant tasks
     boosts = {
+        # backtest / strategy
+        "回测": ["backtest", "回测", "equity", "drawdown", "sharpe", "cagr", "strategy", "策略"],
+        "策略": ["strategy", "策略", "signal", "signals", "entries", "exits"],
+        "双均线": ["ma", "均线", "crossover", "cross", "golden", "death"],
+        "金叉": ["golden", "cross", "crossover", "金叉", "均线"],
+        "死叉": ["death", "cross", "crossover", "死叉", "均线"],
         "均线": ["ma", "ma5", "ma20", "ma60", "rolling", "均线"],
         "MA": ["ma", "rolling"],
         "RSI": ["rsi"],

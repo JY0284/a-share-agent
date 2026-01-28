@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import os
 import sys
+import tempfile
 import traceback
 from contextlib import redirect_stdout, redirect_stderr
 from typing import Any
@@ -79,6 +80,14 @@ def execute_python(code: str, timeout_seconds: int = 60) -> dict[str, Any]:
     
     # Try to add matplotlib if available
     try:
+        # Ensure matplotlib cache/config dir is writable in sandboxed environments
+        mpl_cfg = os.path.join(tempfile.gettempdir(), "a_share_agent_mplconfig")
+        os.makedirs(mpl_cfg, exist_ok=True)
+        os.environ.setdefault("MPLCONFIGDIR", mpl_cfg)
+        cache_home = os.path.join(tempfile.gettempdir(), "a_share_agent_cache")
+        os.makedirs(cache_home, exist_ok=True)
+        os.environ.setdefault("XDG_CACHE_HOME", cache_home)
+
         import matplotlib
         matplotlib.use('Agg')  # Non-interactive backend
         import matplotlib.pyplot as plt
