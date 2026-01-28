@@ -21,6 +21,23 @@ from stock_data.agent_tools import (
     get_weekly_prices,
     get_monthly_prices,
     get_adj_factor,
+    get_index_basic,
+    get_index_daily_prices,
+    get_fund_basic,
+    get_etf_daily_prices,
+    get_fund_nav,
+    get_fund_share,
+    get_fund_div,
+    get_income,
+    get_balancesheet,
+    get_cashflow,
+    get_forecast,
+    get_express,
+    get_dividend,
+    get_fina_indicator,
+    get_fina_audit,
+    get_fina_mainbz,
+    get_disclosure_date,
     get_stock_basic_detail,
     get_stock_company,
     get_universe,
@@ -165,6 +182,55 @@ def tool_get_universe(
         area=area,
         offset=offset,
         limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_index_basic(
+    ts_code: str | None = None,
+    name_contains: str | None = None,
+    market: str | None = None,
+    publisher: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict:
+    """List / search index basic info (指数基础信息) with pagination.
+
+    Use this to discover index `ts_code` (e.g., 上证指数/沪深300/中证500).
+    Then use `tool_get_index_daily_prices(ts_code, ...)` to fetch bars.
+    """
+    return get_index_basic(
+        ts_code=ts_code,
+        name_contains=name_contains,
+        market=market,
+        publisher=publisher,
+        offset=offset,
+        limit=min(limit or 20, 100),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_fund_basic(
+    ts_code: str | None = None,
+    name_contains: str | None = None,
+    management: str | None = None,
+    fund_type: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict:
+    """List / search ETF basic info (基金基础信息; 场内基金/ETF) with pagination.
+
+    Use this to discover ETF `ts_code`, then use `tool_get_etf_daily_prices` / `tool_get_fund_nav` etc.
+    """
+    return get_fund_basic(
+        ts_code=ts_code,
+        name_contains=name_contains,
+        management=management,
+        fund_type=fund_type,
+        offset=offset,
+        limit=min(limit or 20, 100),
         store_dir=STORE_DIR,
     )
 
@@ -375,6 +441,120 @@ def tool_get_monthly_prices(
 
 
 @tool
+def tool_get_index_daily_prices(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get index daily bars (指数日线; most recent first)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=20,
+        default_range=400,
+        max_limit=500,
+    )
+    return get_index_daily_prices(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_etf_daily_prices(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get ETF daily bars (ETF日线; most recent first)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=20,
+        default_range=400,
+        max_limit=500,
+    )
+    return get_etf_daily_prices(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_fund_nav(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get ETF net asset value time series (单位净值; most recent first)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=30,
+        default_range=500,
+        max_limit=500,
+    )
+    return get_fund_nav(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_fund_share(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict:
+    """Get ETF shares outstanding history (份额变动; most recent first)."""
+    limit = _effective_limit(
+        limit,
+        start_date=start_date,
+        end_date=end_date,
+        default_recent=30,
+        default_range=500,
+        max_limit=500,
+    )
+    return get_fund_share(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=limit,
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_fund_div(ts_code: str, offset: int = 0, limit: int = 50) -> dict:
+    """Get ETF dividend distribution history (分红送配)."""
+    return get_fund_div(ts_code, offset=offset, limit=min(limit or 50, 200), store_dir=STORE_DIR)
+
+
+@tool
 def tool_get_adj_factor(
     ts_code: str,
     start_date: str | None = None,
@@ -495,6 +675,194 @@ def tool_get_namechange(
 ) -> dict:
     """Get name change history (supports date range filtering)."""
     return get_namechange(ts_code, start_date=start_date, end_date=end_date, store_dir=STORE_DIR)
+
+
+@tool
+def tool_get_income(
+    ts_code: str,
+    start_period: str | None = None,
+    end_period: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict:
+    """Get income statement (利润表) by report period (end_date), most recent first."""
+    return get_income(
+        ts_code,
+        start_period=start_period,
+        end_period=end_period,
+        offset=offset,
+        limit=min(limit or 20, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_balancesheet(
+    ts_code: str,
+    start_period: str | None = None,
+    end_period: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict:
+    """Get balance sheet (资产负债表) by report period (end_date), most recent first."""
+    return get_balancesheet(
+        ts_code,
+        start_period=start_period,
+        end_period=end_period,
+        offset=offset,
+        limit=min(limit or 20, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_cashflow(
+    ts_code: str,
+    start_period: str | None = None,
+    end_period: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict:
+    """Get cashflow statement (现金流量表) by report period (end_date), most recent first."""
+    return get_cashflow(
+        ts_code,
+        start_period=start_period,
+        end_period=end_period,
+        offset=offset,
+        limit=min(limit or 20, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_fina_indicator(
+    ts_code: str,
+    start_period: str | None = None,
+    end_period: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict:
+    """Get financial indicators (财务指标) by report period (end_date), most recent first."""
+    return get_fina_indicator(
+        ts_code,
+        start_period=start_period,
+        end_period=end_period,
+        offset=offset,
+        limit=min(limit or 20, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_forecast(
+    ts_code: str,
+    start_period: str | None = None,
+    end_period: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get earnings forecast (业绩预告) by report period (end_date), most recent first."""
+    return get_forecast(
+        ts_code,
+        start_period=start_period,
+        end_period=end_period,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_express(
+    ts_code: str,
+    start_period: str | None = None,
+    end_period: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get earnings express (业绩快报) by report period (end_date), most recent first."""
+    return get_express(
+        ts_code,
+        start_period=start_period,
+        end_period=end_period,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_dividend(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get dividend distribution history (分红送股), most recent first (best-effort)."""
+    return get_dividend(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_fina_audit(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get audit opinions history (财务审计意见)."""
+    return get_fina_audit(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_fina_mainbz(
+    ts_code: str,
+    start_period: str | None = None,
+    end_period: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get main business composition (主营业务构成) by report period (end_date), most recent first."""
+    return get_fina_mainbz(
+        ts_code,
+        start_period=start_period,
+        end_period=end_period,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_disclosure_date(
+    ts_code: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get financial report disclosure schedule (财报披露日期表) with pagination."""
+    return get_disclosure_date(
+        ts_code=ts_code,
+        end_date=end_date,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
 
 
 # =============================================================================
@@ -656,10 +1024,27 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     df = store.weekly(ts_code)
     df = store.monthly(ts_code)
     
+    # Index data (指数)
+    idx = store.read("index_basic")  # discover index codes
+    df = store.index_daily("000300.SH", start_date="20230101")  # HS300 example
+    
+    # ETF / fund data
+    fb = store.read("fund_basic")  # discover ETF codes
+    etf_px = store.read("etf_daily", where={"ts_code": "510300.SH"}, start_date="20230101")
+    nav = store.fund_nav("510300.SH", start_date="20230101")
+    share = store.fund_share("510300.SH", start_date="20230101")
+    div = store.fund_div("510300.SH")
+    
     # Valuation data
     df = store.daily_basic(ts_code)  # pe_ttm, pb, total_mv, circ_mv
     # ⚠️ IMPORTANT: store.daily_basic() does NOT accept 'limit' parameter!
     # If you need to limit rows, use: df.tail(n) or df.head(n) after loading
+    
+    # Finance statements (report-period end_date, not trading days)
+    inc = store.income(ts_code, start_period="20200101")
+    bs = store.balancesheet(ts_code, start_period="20200101")
+    cf = store.cashflow(ts_code, start_period="20200101")
+    fi = store.fina_indicator(ts_code, start_period="20200101")
     
     # Other
     df = store.stock_basic(ts_code=ts_code)
@@ -732,17 +1117,34 @@ ALL_TOOLS = [
     tool_get_stock_basic_detail,
     tool_get_stock_company,
     tool_get_universe,
+    tool_get_index_basic,
+    tool_get_fund_basic,
     # Simple Data (for basic lookups, no calculation)
     tool_get_daily_prices,
     tool_get_daily_adj_prices,
     tool_get_daily_basic,
     tool_get_weekly_prices,
     tool_get_monthly_prices,
+    tool_get_index_daily_prices,
+    tool_get_etf_daily_prices,
+    tool_get_fund_nav,
+    tool_get_fund_share,
+    tool_get_fund_div,
     tool_get_adj_factor,
     tool_get_stk_limit,
     tool_get_suspend_d,
     tool_get_new_share,
     tool_get_namechange,
+    tool_get_income,
+    tool_get_balancesheet,
+    tool_get_cashflow,
+    tool_get_fina_indicator,
+    tool_get_forecast,
+    tool_get_express,
+    tool_get_dividend,
+    tool_get_fina_audit,
+    tool_get_fina_mainbz,
+    tool_get_disclosure_date,
     # Calendar
     tool_get_trading_days,
     tool_is_trading_day,
