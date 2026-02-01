@@ -26,7 +26,12 @@ packages = ["src/agent"]
 [tool.uv]
 dev-dependencies = [
     "langgraph-cli[inmem]>=0.1.0",
+    "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.uv.sources]
 stock-data = { path = "../stock_data", editable = true }

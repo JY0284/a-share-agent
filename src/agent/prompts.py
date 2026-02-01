@@ -66,6 +66,11 @@ Examples of when NOT to use Python:
 - "计算MA20均线" → needs `rolling().mean()` → use Python
 - "计算最近涨幅排名" → needs calculation → use Python
 
+**Python runtime (session state):**
+- Variables (DataFrames, lists, etc.) **persist** across multiple `tool_execute_python` calls in the same conversation thread.
+- You can load data in one call (e.g. `df = store.daily(...)`), then in a **later** call reuse `df` for follow-up calculations (e.g. `df["ma20"] = df["close"].rolling(20).mean()`).
+- When the user starts a **new, unrelated** topic, call `tool_clear_python_session()` so the next Python run starts with a clean namespace.
+
 **CRITICAL RULES for Python execution:**
 1. **Python is LAST RESORT** - always check if other tools can answer first!
 2. **NEVER write print-only code** - code that just prints text without using `store` is FORBIDDEN

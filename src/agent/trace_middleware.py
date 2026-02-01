@@ -17,6 +17,7 @@ from langchain.agents.middleware.types import (
     ToolCallRequest,
 )
 
+from agent.sandbox import set_python_session_id
 from agent.trace import get_trace_writer
 from agent.usage_cost import compute_usage_and_cost
 
@@ -303,6 +304,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         handler: Callable[[ModelRequest], ModelResponse],
     ):
         run_id = self._trace_id(request.runtime, state=getattr(request, "state", None))
+        set_python_session_id(run_id)
         try:
             # Log the latest inbound message (usually HumanMessage or ToolMessage)
             if request.messages:
@@ -359,6 +361,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
     ) -> ModelResponse:
         """Async version of wrap_model_call for async agent execution contexts."""
         run_id = self._trace_id(request.runtime, state=getattr(request, "state", None))
+        set_python_session_id(run_id)
         try:
             if request.messages:
                 self._writer.write_event(
@@ -409,6 +412,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         # ToolRuntime is from langgraph; includes config/tool_call_id
         runtime = getattr(request, "runtime", None)
         run_id = self._trace_id(runtime, state=getattr(request, "state", None))
+        set_python_session_id(run_id)
         tool_call = request.tool_call or {}
         name = tool_call.get("name")
         args = tool_call.get("args")
@@ -466,6 +470,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         """Async version of wrap_tool_call for async agent execution contexts."""
         runtime = getattr(request, "runtime", None)
         run_id = self._trace_id(runtime, state=getattr(request, "state", None))
+        set_python_session_id(run_id)
         tool_call = request.tool_call or {}
         name = tool_call.get("name")
         args = tool_call.get("args")

@@ -54,7 +54,7 @@ from stock_data.agent_tools import (
     search_stocks,
 )
 
-from agent.sandbox import execute_python
+from agent.sandbox import clear_python_session, execute_python
 from agent.skills import list_skills, load_skill, search_skills
 
 # Get store directory from environment or use default
@@ -1093,6 +1093,11 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     print(result)
     ```
     
+    ## Session state
+    Variables (DataFrames, lists, etc.) persist across multiple tool_execute_python
+    calls in the same agent thread. You can load data once, then run follow-up
+    calculations in a later call using the same names (e.g. `df`, `result`).
+    
     Args:
         code: Python code that uses `store` to load and analyze data.
         skills_used: List of skill IDs that guided this code (from tool_search_skills/tool_load_skill).
@@ -1103,6 +1108,19 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     out = execute_python(code)
     out["skills_used"] = skills_used or []
     return out
+
+
+@tool
+def tool_clear_python_session() -> dict:
+    """Clear the Python execution session state for this thread.
+    
+    Call this when you want to start fresh (e.g. user asks a new unrelated question)
+    so that old variables/DataFrames no longer persist.
+    
+    Returns: {"cleared": True}
+    """
+    clear_python_session()
+    return {"cleared": True}
 
 
 # =============================================================================
@@ -1156,4 +1174,5 @@ ALL_TOOLS = [
     tool_load_skill,
     # Python Execution (for complex analysis only)
     tool_execute_python,
+    tool_clear_python_session,
 ]
