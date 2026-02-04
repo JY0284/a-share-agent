@@ -14,6 +14,8 @@ import os
 
 from langchain_core.tools import tool
 
+from stock_data.runner import RunConfig
+from stock_data.stats import fetch_stats_json
 from stock_data.agent_tools import (
     get_daily_basic,
     get_daily_adj_prices,
@@ -99,6 +101,70 @@ def tool_search_stocks(
     Returns: {rows: [...], total_count: N, showing: "1-20", has_more: bool}
     """
     return search_stocks(query, offset=offset, limit=limit, store_dir=STORE_DIR)
+
+
+# Category -> short Chinese label (for aggregated output)
+_CATEGORY_ZH: dict[str, str] = {
+    "market": "行情", "finance": "财报", "etf": "ETF", "basic": "基础", "macro": "宏观",
+}
+
+
+@tool
+def tool_get_dataset_status() -> dict:
+    """Get brief dataset coverage: date ranges only (no size). Use when user asks about data availability, latest date, or coverage.
+
+    Returns: {summary: str, latest_date: str|None}
+    """
+    import re
+
+    from stock_data.datasets import dataset_info_map
+
+    cfg = RunConfig(store_dir=STORE_DIR, rpm=500, workers=12)
+    stats = fetch_stats_json(cfg, datasets="all")
+    date_re = re.compile(r"(\d{8})")
+    info_map = dataset_info_map()
+    # Aggregate by category: {category: (min_date, max_date)}
+    by_cat: dict[str, tuple[str | None, str | None]] = {}
+    latest_ts: str | None = None
+
+    def _fmt(val: str | None) -> str | None:
+        if not val:
+            return None
+        m = date_re.search(val)
+        if m:
+            d = m[1]
+            return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+        return None
+
+    for s in stats:
+        min_d = _fmt(s.get("min_partition"))
+        max_d = _fmt(s.get("max_partition"))
+        if not min_d and not max_d:
+            continue
+        cat = info_map.get(s["dataset"])
+        key = cat.category if cat else "other"
+        prev = by_cat.get(key, (None, None))
+        pmin, pmax = prev
+        if min_d and (pmin is None or min_d < pmin):
+            pmin = min_d
+        if max_d and (pmax is None or max_d > pmax):
+            pmax = max_d
+        by_cat[key] = (pmin, pmax)
+        if max_d and (latest_ts is None or max_d > latest_ts):
+            latest_ts = max_d
+
+    parts = []
+    for cat in ("market", "finance", "etf", "basic", "macro"):
+        if cat not in by_cat:
+            continue
+        pmin, pmax = by_cat[cat]
+        label = _CATEGORY_ZH.get(cat, cat)
+        if pmin or pmax:
+            parts.append(f"{label} {pmin or '-'}~{pmax or '-'}")
+        else:
+            parts.append(f"{label} 按代码")
+    summary = "；".join(parts) + (f"；最新 {latest_ts}" if latest_ts else "")
+    return {"summary": summary, "latest_date": latest_ts}
 
 
 @tool
@@ -1130,6 +1196,7 @@ def tool_clear_python_session() -> dict:
 ALL_TOOLS = [
     # Discovery (use these first!)
     tool_search_stocks,
+    tool_get_dataset_status,
     tool_list_industries,
     tool_resolve_symbol,
     tool_get_stock_basic_detail,
