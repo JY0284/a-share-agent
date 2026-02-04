@@ -42,6 +42,26 @@ df["ret_b"] = df["close_b"].pct_change()
 result = {"pair": f"{a} vs {b}", "corr_ret": float(df[["ret_a", "ret_b"]].dropna().corr().iloc[0, 1])}
 ```
 
+### Rank by momentum and pick top-K (building block for momentum rotation backtests)
+
+Same date alignment, same N-day return per symbol, sort by return, take top-K. Used in momentum rotation: rank → hold top-K → rebalance over time.
+
+```python
+ts_codes = ["600519.SH", "000858.SZ", "000568.SZ"]
+start_date, end_date = "20241001", "20250110"
+n_days, top_k = 20, 2
+
+rows = []
+for ts in ts_codes:
+    df = store.daily_adj(ts, how="qfq", start_date=start_date, end_date=end_date).sort_values("trade_date")
+    if df.empty or len(df) < n_days + 1:
+        continue
+    ret_n = df["close"].pct_change(n_days).iloc[-1]
+    rows.append({"ts_code": ts, "trade_date": int(df["trade_date"].iloc[-1]), "ret_Nd": ret_n})
+ranked = pd.DataFrame(rows).dropna().sort_values("ret_Nd", ascending=False).head(top_k)
+result = ranked
+```
+
 ## Common bugs to avoid
 - Comparing returns computed on different date ranges.
 - Forgetting to use adjusted prices for performance comparisons.

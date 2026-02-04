@@ -7,6 +7,9 @@ tags: [momentum, breakout, high52w, donchian, 动量, 突破, 新高]
 ## Core rule
 Momentum/breakout signals are **window-based**; use enough history and avoid lookahead by using `.shift(1)` when comparing to “prior highs”.
 
+## Scope
+This skill is **single-asset** (one ts_code): breakout, 52w high, N-day momentum. For **cross-asset momentum rotation** (rank many symbols, hold top-K, rebalance over time), use multi-symbol ranking plus a rebalance backtest; that pattern is in a separate backtest skill.
+
 ## Recommended patterns
 
 ### 20-day breakout (close > prior 20D high)

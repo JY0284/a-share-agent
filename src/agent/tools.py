@@ -11,9 +11,12 @@ then use Python execution for actual data analysis and calculations.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone, timedelta
 
 from langchain_core.tools import tool
 
+from stock_data.runner import RunConfig
+from stock_data.stats import fetch_stats_json
 from stock_data.agent_tools import (
     get_daily_basic,
     get_daily_adj_prices,
@@ -54,7 +57,7 @@ from stock_data.agent_tools import (
     search_stocks,
 )
 
-from agent.sandbox import execute_python
+from agent.sandbox import clear_python_session, execute_python
 from agent.skills import list_skills, load_skill, search_skills
 
 # Get store directory from environment or use default
@@ -99,6 +102,95 @@ def tool_search_stocks(
     Returns: {rows: [...], total_count: N, showing: "1-20", has_more: bool}
     """
     return search_stocks(query, offset=offset, limit=limit, store_dir=STORE_DIR)
+
+
+# Category -> short Chinese label (for aggregated output)
+_CATEGORY_ZH: dict[str, str] = {
+    "market": "行情", "finance": "财报", "etf": "ETF", "basic": "基础", "macro": "宏观",
+}
+
+
+@tool
+def tool_get_dataset_status() -> dict:
+    """Get brief dataset coverage: date ranges only (no size). Use when user asks about data availability, latest date, or coverage.
+
+    Returns: {summary: str, latest_date: str|None}
+    """
+    import re
+
+    from stock_data.datasets import dataset_info_map
+
+    cfg = RunConfig(store_dir=STORE_DIR, rpm=500, workers=12)
+    stats = fetch_stats_json(cfg, datasets="all")
+    date_re = re.compile(r"(\d{8})")
+    info_map = dataset_info_map()
+    # Aggregate by category: {category: (min_date, max_date)}
+    by_cat: dict[str, tuple[str | None, str | None]] = {}
+    latest_ts: str | None = None
+
+    def _fmt(val: str | None) -> str | None:
+        if not val:
+            return None
+        m = date_re.search(val)
+        if m:
+            d = m[1]
+            return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+        return None
+
+    for s in stats:
+        min_d = _fmt(s.get("min_partition"))
+        max_d = _fmt(s.get("max_partition"))
+        if not min_d and not max_d:
+            continue
+        cat = info_map.get(s["dataset"])
+        key = cat.category if cat else "other"
+        prev = by_cat.get(key, (None, None))
+        pmin, pmax = prev
+        if min_d and (pmin is None or min_d < pmin):
+            pmin = min_d
+        if max_d and (pmax is None or max_d > pmax):
+            pmax = max_d
+        by_cat[key] = (pmin, pmax)
+        if max_d and (latest_ts is None or max_d > latest_ts):
+            latest_ts = max_d
+
+    parts = []
+    for cat in ("market", "finance", "etf", "basic", "macro"):
+        if cat not in by_cat:
+            continue
+        pmin, pmax = by_cat[cat]
+        label = _CATEGORY_ZH.get(cat, cat)
+        if pmin or pmax:
+            parts.append(f"{label} {pmin or '-'}~{pmax or '-'}")
+        else:
+            parts.append(f"{label} 按代码")
+    summary = "；".join(parts) + (f"；最新 {latest_ts}" if latest_ts else "")
+    return {"summary": summary, "latest_date": latest_ts}
+
+
+@tool
+def tool_get_current_datetime() -> dict:
+    """Get the actual current date and time in Beijing (UTC+8).
+
+    Use this when you need to state the current system time/date to the user,
+    or when assessing data freshness. The date in the system prompt header is
+    set at server startup and may be stale if the server has been running for days.
+
+    Returns: {date: YYYY-MM-DD, date_compact: YYYYMMDD, time: HH:MM, weekday: e.g. Wednesday, display_zh: Chinese display string}
+    """
+    tz = timezone(timedelta(hours=8))
+    now = datetime.now(tz)
+    weekdays_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    weekdays_zh = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    wd = now.weekday()
+    return {
+        "date": now.strftime("%Y-%m-%d"),
+        "date_compact": now.strftime("%Y%m%d"),
+        "time": now.strftime("%H:%M"),
+        "weekday": weekdays_en[wd],
+        "weekday_zh": weekdays_zh[wd],
+        "display_zh": f"{now.strftime('%Y年%m月%d日')}（{weekdays_zh[wd]}）{now.strftime('%H:%M')}（北京时间）",
+    }
 
 
 @tool
@@ -1093,6 +1185,11 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     print(result)
     ```
     
+    ## Session state
+    Variables (DataFrames, lists, etc.) persist across multiple tool_execute_python
+    calls in the same agent thread. You can load data once, then run follow-up
+    calculations in a later call using the same names (e.g. `df`, `result`).
+    
     Args:
         code: Python code that uses `store` to load and analyze data.
         skills_used: List of skill IDs that guided this code (from tool_search_skills/tool_load_skill).
@@ -1105,6 +1202,19 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     return out
 
 
+@tool
+def tool_clear_python_session() -> dict:
+    """Clear the Python execution session state for this thread.
+    
+    Call this when you want to start fresh (e.g. user asks a new unrelated question)
+    so that old variables/DataFrames no longer persist.
+    
+    Returns: {"cleared": True}
+    """
+    clear_python_session()
+    return {"cleared": True}
+
+
 # =============================================================================
 # EXPORT
 # =============================================================================
@@ -1112,6 +1222,8 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
 ALL_TOOLS = [
     # Discovery (use these first!)
     tool_search_stocks,
+    tool_get_dataset_status,
+    tool_get_current_datetime,
     tool_list_industries,
     tool_resolve_symbol,
     tool_get_stock_basic_detail,
@@ -1156,4 +1268,5 @@ ALL_TOOLS = [
     tool_load_skill,
     # Python Execution (for complex analysis only)
     tool_execute_python,
+    tool_clear_python_session,
 ]

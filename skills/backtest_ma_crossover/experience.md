@@ -12,6 +12,12 @@ Backtests MUST use the agent’s **stock-data store** (`store.*`) as the data so
 - ✅ Always sort by `trade_date` ascending before rolling or `pct_change`
 - ✅ Avoid lookahead: compute signals on day *t*, execute from day *t+1* (`shift(1)`)
 
+## Strategy context (dual MA)
+- **Golden cross**: short MA crosses above long MA → buy (entry).
+- **Death cross**: short MA crosses below long MA → sell (exit).
+- Common param sets: 5/20 (short-term, more signals), 10/30 (balanced), 20/60 (mid-term, fewer signals), 50/200 (long-term).
+- This skill uses **SMA** (`.rolling(n).mean()`). For **EMA** crossover use `.ewm(span=n, adjust=False).mean()`.
+
 ## Before Python: resolve to canonical `ts_code`
 Backtests need a canonical code like `600519.SH` / `300888.SZ`.
 
