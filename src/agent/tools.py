@@ -11,6 +11,7 @@ then use Python execution for actual data analysis and calculations.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone, timedelta
 
 from langchain_core.tools import tool
 
@@ -165,6 +166,31 @@ def tool_get_dataset_status() -> dict:
             parts.append(f"{label} 按代码")
     summary = "；".join(parts) + (f"；最新 {latest_ts}" if latest_ts else "")
     return {"summary": summary, "latest_date": latest_ts}
+
+
+@tool
+def tool_get_current_datetime() -> dict:
+    """Get the actual current date and time in Beijing (UTC+8).
+
+    Use this when you need to state the current system time/date to the user,
+    or when assessing data freshness. The date in the system prompt header is
+    set at server startup and may be stale if the server has been running for days.
+
+    Returns: {date: YYYY-MM-DD, date_compact: YYYYMMDD, time: HH:MM, weekday: e.g. Wednesday, display_zh: Chinese display string}
+    """
+    tz = timezone(timedelta(hours=8))
+    now = datetime.now(tz)
+    weekdays_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    weekdays_zh = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    wd = now.weekday()
+    return {
+        "date": now.strftime("%Y-%m-%d"),
+        "date_compact": now.strftime("%Y%m%d"),
+        "time": now.strftime("%H:%M"),
+        "weekday": weekdays_en[wd],
+        "weekday_zh": weekdays_zh[wd],
+        "display_zh": f"{now.strftime('%Y年%m月%d日')}（{weekdays_zh[wd]}）{now.strftime('%H:%M')}（北京时间）",
+    }
 
 
 @tool
@@ -1197,6 +1223,7 @@ ALL_TOOLS = [
     # Discovery (use these first!)
     tool_search_stocks,
     tool_get_dataset_status,
+    tool_get_current_datetime,
     tool_list_industries,
     tool_resolve_symbol,
     tool_get_stock_basic_detail,

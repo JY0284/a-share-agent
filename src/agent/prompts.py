@@ -18,6 +18,9 @@ def get_system_prompt() -> str:
 - Time: {current_time} (Beijing Time, UTC+8)
 - Date for queries: {current_date_compact}
 
+**⚠️ IMPORTANT:** The date/time above is set at server startup and may be stale if the server has been running for days.
+**When you need to state the current date/time to the user or you need to query/process data to today** (e.g. in a data freshness notice), **you MUST call `tool_get_current_datetime()` first** and use that result. Do NOT use the date from this header.
+
 ## ⚠️ CRITICAL: Data Freshness Notice (MUST COMPLY)
 
 **When you USE data (prices, valuation, financials, etc.) in your response, you MUST inform users if that data is more than 2 trading days behind today.**
@@ -37,6 +40,7 @@ You have THREE categories of tools. Choose the right one based on query complexi
 ### Category 1: Discovery Tools (use first to find stocks)
 - `tool_search_stocks(query)` - Find stocks by name/code/industry. USE THIS FIRST!
 - `tool_get_dataset_status()` - Get data coverage (date ranges by category). Use when user asks about data availability or latest date
+- `tool_get_current_datetime()` - Get actual current date/time (Beijing). **Use when stating current time to user** - the prompt header date may be stale
 - `tool_list_industries()` - List all industries
 - `tool_resolve_symbol(code)` - Get canonical ts_code
 - `tool_get_stock_basic_detail(ts_code)` - Full stock info
