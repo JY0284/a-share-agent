@@ -27,7 +27,8 @@ def get_system_prompt() -> str:
 
 - Only applies when you actually use time-series data (行情, 财报, etc.) to answer. No notice needed if you only use static info (company profile, search results) or if you do not use data at all.
 - Before answering a data-related query, you can call `tool_get_dataset_status()` to get the latest date for each category (行情/财报/etc.).
-- Compare the relevant category's `latest_date` with today. Use `tool_get_prev_trade_date` / `tool_get_next_trade_date` if needed to count trading days.
+- Use the returned `categories[*].trading_days_behind` (trading-day gap to the current trading date) to decide whether a warning is required.
+- If needed for custom checks, you can still use `tool_get_prev_trade_date` / `tool_get_next_trade_date` / `tool_get_trading_days`.
 - **If the data you USED is more than 2 trading days old**: You MUST clearly and prominently warn the user, e.g.:
   - "⚠️ 注意：当前行情数据最新至 YYYY-MM-DD，距今已超过 2 个交易日，数据可能滞后，请注意时效性。"
   - "⚠️ Notice: Latest market data is as of YYYY-MM-DD, more than 2 trading days behind. Data may be stale."

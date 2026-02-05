@@ -112,9 +112,28 @@ _CATEGORY_ZH: dict[str, str] = {
 
 @tool
 def tool_get_dataset_status() -> dict:
-    """Get brief dataset coverage: date ranges only (no size). Use when user asks about data availability, latest date, or coverage.
+    """Get dataset coverage + freshness by category.
 
-    Returns: {summary: str, latest_date: str|None}
+    Use when the user asks about data availability, latest dates, or when the agent needs
+    to decide whether to warn about stale data (>2 trading days behind).
+
+    The tool:
+    - Computes the *current* Beijing date and current trading date (last trading day <= today)
+    - Aggregates min/max partitions per dataset category
+    - Computes trading-days-behind for each category
+    - Appends a short freshness conclusion
+
+    Backward compatible keys are preserved: `summary`, `latest_date`.
+
+    Returns:
+        {
+          summary: str,
+          latest_date: str|None,
+          now: {date, date_compact, current_trade_date},
+          categories: [{category, label_zh, min_date, latest_date, trading_days_behind, is_stale}],
+          conclusion: str,
+          report: str,
+        }
     """
     import re
 
@@ -124,9 +143,25 @@ def tool_get_dataset_status() -> dict:
     stats = fetch_stats_json(cfg, datasets="all")
     date_re = re.compile(r"(\d{8})")
     info_map = dataset_info_map()
-    # Aggregate by category: {category: (min_date, max_date)}
+    # Aggregate by category: {category: (min_date_iso, max_date_iso)}
     by_cat: dict[str, tuple[str | None, str | None]] = {}
     latest_ts: str | None = None
+
+    tz = timezone(timedelta(hours=8))
+    now_dt = datetime.now(tz)
+    today_compact = now_dt.strftime("%Y%m%d")
+
+    # Determine current trading date (last trading day <= today)
+    try:
+        is_td = is_trading_day(today_compact, store_dir=STORE_DIR)
+        if bool(is_td.get("is_trading_day")):
+            current_trade_date = today_compact
+        else:
+            prev = get_prev_trade_date(today_compact, store_dir=STORE_DIR)
+            current_trade_date = prev.get("prev_trade_date") or today_compact
+    except Exception:
+        # Fallback: if trading calendar isn't available, use today's date.
+        current_trade_date = today_compact
 
     def _fmt(val: str | None) -> str | None:
         if not val:
@@ -136,6 +171,33 @@ def tool_get_dataset_status() -> dict:
             d = m[1]
             return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
         return None
+
+    def _to_compact(iso_date: str | None) -> str | None:
+        if not iso_date:
+            return None
+        return iso_date.replace("-", "")
+
+    def _trading_days_behind(latest_iso: str | None) -> int | None:
+        """Return number of trading days from latest_iso to current_trade_date.
+
+        0 means up-to-date at current_trade_date.
+        1 means one trading day behind, etc.
+        """
+        latest_compact = _to_compact(latest_iso)
+        if not latest_compact:
+            return None
+        if latest_compact >= current_trade_date:
+            return 0
+        try:
+            nxt = get_next_trade_date(latest_compact, store_dir=STORE_DIR)
+            start = nxt.get("next_trade_date")
+            if not start:
+                return None
+            days = get_trading_days(start, current_trade_date, store_dir=STORE_DIR)
+            td_list = days.get("trading_days") or []
+            return int(len(td_list))
+        except Exception:
+            return None
 
     for s in stats:
         min_d = _fmt(s.get("min_partition"))
@@ -164,8 +226,65 @@ def tool_get_dataset_status() -> dict:
             parts.append(f"{label} {pmin or '-'}~{pmax or '-'}")
         else:
             parts.append(f"{label} 按代码")
+
+    categories: list[dict] = []
+    stale_labels: list[str] = []
+    for cat in ("market", "finance", "etf", "basic", "macro"):
+        if cat not in by_cat:
+            continue
+        pmin, pmax = by_cat[cat]
+        label = _CATEGORY_ZH.get(cat, cat)
+        behind = _trading_days_behind(pmax)
+        is_stale = behind is not None and behind > 2
+        if is_stale:
+            stale_labels.append(f"{label}({behind}个交易日)")
+        categories.append(
+            {
+                "category": cat,
+                "label_zh": label,
+                "min_date": pmin,
+                "latest_date": pmax,
+                "trading_days_behind": behind,
+                "is_stale": is_stale,
+            }
+        )
+
+    if stale_labels:
+        conclusion = "⚠️ 数据可能滞后：" + "，".join(stale_labels) + "（>2个交易日）"
+    else:
+        conclusion = "✅ 数据新鲜：各类数据距今均不超过2个交易日（按交易日计）"
+
+    now_info = {
+        "date": now_dt.strftime("%Y-%m-%d"),
+        "date_compact": today_compact,
+        "current_trade_date": current_trade_date,
+    }
+
     summary = "；".join(parts) + (f"；最新 {latest_ts}" if latest_ts else "")
-    return {"summary": summary, "latest_date": latest_ts}
+
+    lines = [
+        f"当前日期(北京时间)：{now_info['date']}（查询用：{now_info['date_compact']}）",
+        f"当前交易日：{current_trade_date}",
+        "数据最新日期（按类别）：",
+    ]
+    for row in categories:
+        latest = row.get("latest_date") or "-"
+        behind = row.get("trading_days_behind")
+        behind_txt = "-" if behind is None else str(behind)
+        warn = " ⚠️" if row.get("is_stale") else ""
+        lines.append(f"- {row['label_zh']}: 最新 {latest}；落后 {behind_txt} 个交易日{warn}")
+    lines.append("结论：" + conclusion)
+
+    report = "\n".join(lines)
+
+    return {
+        "summary": summary,
+        "latest_date": latest_ts,
+        "now": now_info,
+        "categories": categories,
+        "conclusion": conclusion,
+        "report": report,
+    }
 
 
 @tool
