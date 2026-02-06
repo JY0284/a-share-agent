@@ -171,3 +171,17 @@ def test_tool_returns_skills_used():
     assert out.get("success") is True
     assert out.get("skills_used") == ["backtest_ma_crossover", "rolling_indicators"]
     clear_python_session("conv-skills")
+
+
+def test_execute_python_error_hints_offset() -> None:
+    out = execute_python("raise TypeError(\"StockStore.read() got an unexpected keyword argument 'offset'\")")
+    assert out["success"] is False
+    assert "Hints:" in (out["error"] or "")
+    assert "offset" in (out["error"] or "")
+
+
+def test_execute_python_error_hints_missing_ts_code() -> None:
+    out = execute_python("raise Exception(\"BinderException: Referenced column \\\"ts_code\\\" not found\")")
+    assert out["success"] is False
+    assert "Hints:" in (out["error"] or "")
+    assert "ts_code" in (out["error"] or "")
