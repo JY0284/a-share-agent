@@ -12,10 +12,31 @@ Rolling indicators require enough history. Pull at least:
 - MACD(12,26,9) → 60+ rows is safer
 - Bollinger(20) → 40+ rows is safer
 
+## Robust template (avoid common KeyError/empty-data bugs)
+
+Use this skeleton before any rolling/EMA logic:
+
+```python
+df = store.daily(ts_code, start_date="20240101")
+
+required = {"trade_date", "close"}
+if df is None or df.empty or not required.issubset(df.columns):
+    result = {"ts_code": ts_code, "ok": False, "reason": "no data or missing cols", "cols": list(df.columns) if df is not None else None}
+else:
+    df = df.sort_values("trade_date")
+    # Optional: normalize trade_date dtype for comparisons/slicing
+    df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").astype(int)
+    result = {"ts_code": ts_code, "ok": True, "n_rows": int(len(df))}
+```
+
 ## Moving averages (MA)
 
 ```python
-df = store.daily(ts_code, start_date="20240101").sort_values("trade_date")
+df = store.daily(ts_code, start_date="20240101")
+if df is None or df.empty:
+    result = pd.DataFrame()
+else:
+    df = df.sort_values("trade_date")
 df["ma5"] = df["close"].rolling(5).mean()
 df["ma20"] = df["close"].rolling(20).mean()
 df["ma60"] = df["close"].rolling(60).mean()

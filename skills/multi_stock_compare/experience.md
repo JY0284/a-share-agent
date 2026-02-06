@@ -42,6 +42,28 @@ df["ret_b"] = df["close_b"].pct_change()
 result = {"pair": f"{a} vs {b}", "corr_ret": float(df[["ret_a", "ret_b"]].dropna().corr().iloc[0, 1])}
 ```
 
+### Safe covariance / correlation (avoids “arrays must be same length”)
+
+```python
+a, b = "600519.SH", "000858.SZ"
+start_date, end_date = "20241001", "20250110"
+
+df_a = store.daily_adj(a, how="qfq", start_date=start_date, end_date=end_date).sort_values("trade_date")[["trade_date", "close"]]
+df_b = store.daily_adj(b, how="qfq", start_date=start_date, end_date=end_date).sort_values("trade_date")[["trade_date", "close"]]
+
+df = df_a.merge(df_b, on="trade_date", how="inner", suffixes=("_a", "_b"))
+df["ret_a"] = df["close_a"].pct_change()
+df["ret_b"] = df["close_b"].pct_change()
+
+pair = df[["ret_a", "ret_b"]].dropna()
+result = {
+    "pair": f"{a} vs {b}",
+    "n_aligned": int(len(pair)),
+    "corr_ret": float(pair.corr().iloc[0, 1]) if len(pair) >= 2 else None,
+    "cov_ret": pair.cov().to_dict() if len(pair) >= 2 else None,
+}
+```
+
 ### Rank by momentum and pick top-K (building block for momentum rotation backtests)
 
 Same date alignment, same N-day return per symbol, sort by return, take top-K. Used in momentum rotation: rank → hold top-K → rebalance over time.
@@ -66,6 +88,7 @@ result = ranked
 - Comparing returns computed on different date ranges.
 - Forgetting to use adjusted prices for performance comparisons.
 - Presenting incomparable units (e.g., mix % and raw numbers).
+- Building DataFrames from unaligned arrays/Series (must align on `trade_date` with an inner-merge).
 
 ## See also
 - `trading_day_windows`: build windows using trading days

@@ -68,6 +68,101 @@ def get_store():
     return _store
 
 
+_DATE_COLS = ("trade_date", "end_date", "ann_date", "f_ann_date")
+
+
+def _coerce_yyyymmdd_intlike(s: pd.Series) -> pd.Series:
+    """Coerce YYYYMMDD-like columns to int-like values when safe.
+
+    Many datasets store dates as strings/Arrow strings; code often compares them
+    with ints (e.g. df[df['trade_date'] >= 20240101]), which raises dtype errors.
+    """
+    if s is None:
+        return s
+
+    if pd.api.types.is_integer_dtype(s.dtype):
+        return s
+
+    # Convert to string, remove '-', then numeric
+    try:
+        ss = s.astype(str).str.replace("-", "", regex=False)
+        out = pd.to_numeric(ss, errors="ignore")
+        return out
+    except Exception:
+        return s
+
+
+def _coerce_df_date_cols(df: Any) -> Any:
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    for c in _DATE_COLS:
+        if c in df.columns:
+            df[c] = _coerce_yyyymmdd_intlike(df[c])
+    return df
+
+
+class _StoreProxy:
+    """Proxy StockStore to normalize common gotchas for analysis code."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._inner, name)
+        if not callable(attr):
+            return attr
+
+        def _wrapped(*args, **kwargs):
+            out = attr(*args, **kwargs)
+            return _coerce_df_date_cols(out)
+
+        return _wrapped
+
+
+def _enhance_error_message(err: str) -> str:
+    """Append targeted hints for common failures seen in traces."""
+    if not err:
+        return err
+    hints: list[str] = []
+
+    # Tool misuse inside Python
+    if "from tool_use" in err or "tool_get_" in err and "ModuleNotFoundError" in err:
+        hints.append("不要在 Python 代码里 import/调用工具；请先在对话里调用 tool_* 获取数据，再用 Python 做计算。")
+
+    # Store API misuse: offset/limit
+    if "unexpected keyword argument 'offset'" in err or "unexpected keyword argument \"offset\"" in err:
+        hints.append("store.read() 不支持 offset 分页；请改用 tool_get_universe(offset, limit) 或一次性读取后用 pandas 切片。")
+    if "unexpected keyword argument 'limit'" in err or "unexpected keyword argument \"limit\"" in err:
+        hints.append("很多 store.* 方法不支持 limit；请先加载 DataFrame，再用 .head(n)/.tail(n) 截取。")
+
+    # DuckDB/Parquet binder error: missing ts_code
+    if "Referenced column \"ts_code\" not found" in err or "Referenced column 'ts_code' not found" in err:
+        hints.append("不要用 store.read(..., where={'ts_code': ...}) 过滤该表；优先用专用方法如 store.income/ store.fina_indicator(ts_code, ...)。")
+
+    # Common dtype mismatch on trade_date
+    if "Invalid comparison between dtype=str and int" in err or "not supported between instances of 'str' and 'int'" in err:
+        hints.append("日期列请统一类型：推荐把 trade_date/end_date 转成 YYYYMMDD 的 int（例如 df['trade_date']=df['trade_date'].astype(str).str.replace('-', '').astype(int)）。")
+
+    # Optional deps
+    if "No module named 'matplotlib'" in err:
+        hints.append("环境缺少 matplotlib；如不画图请删掉 import/绘图代码，或安装依赖后再运行。")
+    if "No module named 'scipy'" in err:
+        hints.append("环境缺少 scipy；如不需要统计检验请移除 scipy 依赖，或安装 scipy 后再运行。")
+
+    # KeyError for derived columns
+    if "KeyError:" in err and ("ma" in err or "significant" in err or "公告" in err):
+        hints.append("KeyError 通常表示列没生成/数据为空；先检查 df.empty / len(df) 是否足够，再创建列后再引用。")
+
+    # NameError
+    if "NameError:" in err:
+        hints.append("NameError 表示变量未定义：确保变量在所有分支都被赋值，或把依赖变量的代码放到变量定义之后。")
+
+    if not hints:
+        return err
+
+    return err + "\n\nHints:\n- " + "\n- ".join(hints)
+
+
 def _create_base_namespace() -> dict[str, Any]:
     """Build the initial execution namespace (pd, np, store, plt if available)."""
     namespace: dict[str, Any] = {
@@ -76,7 +171,7 @@ def _create_base_namespace() -> dict[str, Any]:
         "pandas": pd,
         "numpy": np,
         "scipy": scipy,
-        "store": get_store(),
+        "store": _StoreProxy(get_store()),
         "STORE_DIR": STORE_DIR,
         "__builtins__": __builtins__,
     }
@@ -154,6 +249,7 @@ def execute_python(code: str, session_id: str | None = None, timeout_seconds: in
         
     except Exception as e:
         error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        error = _enhance_error_message(error)
         success = False
     
     # Get captured output
