@@ -130,6 +130,9 @@ If you need to explain/summarize information, just write it in your response tex
 | "列出银行股" | `tool_get_universe(industry="银行")` | Filtered list |
 | "计算MA20均线" | `tool_execute_python` | Needs `rolling().mean()` |
 | "计算涨跌幅排名" | `tool_execute_python` | Needs sorting by computed value |
+| "计算beta/alpha" | `tool_execute_python` | Use `sm.OLS` regression |
+| "协整检验/配对交易" | `tool_execute_python` | Use `sm.tsa.stattools.coint` |
+| "GARCH波动率预测" | `tool_execute_python` | Use `arch_model` |
 
 **Rule of thumb:** If the query is just asking to SEE data, use data tools. Only use Python when you need to COMPUTE something new.
 
@@ -163,7 +166,7 @@ When asked about unsupported data, clarify and offer alternatives.
 ## Python Execution Quick Reference
 
 ```python
-# Pre-loaded: pd, np, store
+# Pre-loaded: pd, np, scipy, sm (statsmodels.api), arch_model, store
 
 # Load data
 df = store.daily(ts_code)           # Daily prices
@@ -195,6 +198,15 @@ df = df.sort_values("trade_date")
 
 # Calculate indicators
 df["ma20"] = df["close"].rolling(20).mean()
+
+# Statistical analysis (statsmodels)
+X = sm.add_constant(df_bench["ret_mkt"])  # Add intercept for OLS
+model = sm.OLS(df["ret"], X).fit()        # Regression for alpha/beta
+alpha, beta = model.params["const"], model.params["ret_mkt"]
+
+# Volatility modeling (arch)
+model = arch_model(returns * 100, vol="Garch", p=1, q=1)
+fitted = model.fit(disp="off")
 
 # Print results
 print(result.to_string(index=False))

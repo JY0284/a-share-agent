@@ -21,6 +21,8 @@ from typing import Any
 import pandas as pd
 import numpy as np
 import scipy
+import statsmodels.api as sm
+from arch import arch_model
 
 from stock_data.store import open_store
 
@@ -148,6 +150,10 @@ def _enhance_error_message(err: str) -> str:
         hints.append("环境缺少 matplotlib；如不画图请删掉 import/绘图代码，或安装依赖后再运行。")
     if "No module named 'scipy'" in err:
         hints.append("环境缺少 scipy；如不需要统计检验请移除 scipy 依赖，或安装 scipy 后再运行。")
+    if "No module named 'statsmodels'" in err:
+        hints.append("环境缺少 statsmodels；已预装 sm (statsmodels.api)，直接使用 sm.OLS / sm.add_constant 等。")
+    if "No module named 'arch'" in err:
+        hints.append("环境缺少 arch；已预装 arch_model，直接使用 arch_model(returns, vol='Garch', p=1, q=1) 即可。")
 
     # KeyError for derived columns
     if "KeyError:" in err and ("ma" in err or "significant" in err or "公告" in err):
@@ -164,13 +170,16 @@ def _enhance_error_message(err: str) -> str:
 
 
 def _create_base_namespace() -> dict[str, Any]:
-    """Build the initial execution namespace (pd, np, store, plt if available)."""
+    """Build the initial execution namespace (pd, np, store, plt, sm, arch_model if available)."""
     namespace: dict[str, Any] = {
         "pd": pd,
         "np": np,
         "pandas": pd,
         "numpy": np,
         "scipy": scipy,
+        "sm": sm,
+        "statsmodels": sm,
+        "arch_model": arch_model,
         "store": _StoreProxy(get_store()),
         "STORE_DIR": STORE_DIR,
         "__builtins__": __builtins__,
@@ -201,6 +210,9 @@ def execute_python(code: str, session_id: str | None = None, timeout_seconds: in
     The execution environment includes:
     - `pd`: pandas
     - `np`: numpy
+    - `scipy`: scipy (for stats)
+    - `sm`: statsmodels.api (OLS, add_constant, time series, etc.)
+    - `arch_model`: arch.arch_model (GARCH volatility models)
     - `store`: StockStore instance for data access
     - `plt`: matplotlib.pyplot (if available)
     

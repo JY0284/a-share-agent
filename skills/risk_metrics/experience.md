@@ -43,3 +43,7 @@ result = df[["trade_date", "vol20_ann"]].dropna().tail(20)
 - Using price std dev instead of return std dev.
 - Forgetting to annualize assumptions (252 trading days is a convention).
 
+## See also
+- `statistical_analysis`: alpha/beta regression, hypothesis tests
+- `time_series_forecast`: GARCH volatility forecasting models
+
