@@ -10,6 +10,7 @@ from langchain_deepseek import ChatDeepSeek
 
 from agent.prompts import get_system_prompt
 from agent.python_guard_middleware import PythonGuardMiddleware
+from agent.skill_injection_middleware import SkillInjectionMiddleware
 from agent.trace_middleware import LocalTraceMiddleware
 from agent.tools import ALL_TOOLS
 from agent.web_search import WEB_SEARCH_TOOLS, get_tavily_api_key
@@ -33,5 +34,10 @@ graph = create_agent(
     model=model,
     tools=get_all_tools(),
     system_prompt=get_system_prompt(),
-    middleware=[LocalTraceMiddleware(), PythonGuardMiddleware(), TodoListMiddleware()],
+    middleware=[
+        LocalTraceMiddleware(),
+        SkillInjectionMiddleware(),  # Inject relevant skill content based on query
+        PythonGuardMiddleware(),
+        TodoListMiddleware(),
+    ],
 )

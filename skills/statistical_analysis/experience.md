@@ -1,5 +1,4 @@
-````markdown
----
+﻿---
 name: statistical_analysis
 description: Statistical analysis for stock data using statsmodels - regression, time series (ARIMA), stationarity tests (ADF), cointegration, factor models, and hypothesis testing.
 tags: [stats, statsmodels, regression, OLS, ARIMA, ADF, cointegration, 统计分析, 回归, 时间序列, 协整, alpha, beta, factor]
@@ -84,7 +83,7 @@ result = {
     "return_p_value": round(adf_ret[1], 4),
     "return_stationary": adf_ret[1] < 0.05,
 }
-# p < 0.05 → reject null (series is stationary)
+# p < 0.05 鈫?reject null (series is stationary)
 ```
 
 ### 3) Cointegration Test - Pairs Trading
@@ -115,7 +114,7 @@ result = {
     "crit_5%": round(crit_values[1], 4),
     "n_obs": len(merged)
 }
-# p < 0.05 → cointegrated, spread is mean-reverting
+# p < 0.05 鈫?cointegrated, spread is mean-reverting
 ```
 
 ### 4) ARIMA Model - Time Series Forecasting
@@ -268,10 +267,8 @@ result = {
 - **Alpha > 0**: Outperformance vs benchmark (risk-adjusted)
 - **ADF p < 0.05**: Series is stationary
 - **Cointegration p < 0.05**: Pair is cointegrated (mean-reverting)
-- **R² close to 1**: Model explains most variance
+- **R虏 close to 1**: Model explains most variance
 
 ## See also
 - `risk_metrics`: volatility and drawdown calculations
 - `rolling_indicators`: technical indicators (MA, RSI, MACD)
-- `adj_prices_and_returns`: return computation basics
-````

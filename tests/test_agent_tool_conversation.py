@@ -173,6 +173,37 @@ def test_tool_returns_skills_used():
     clear_python_session("conv-skills")
 
 
+# ---- Test smart skill auto-selection ----
+
+def test_smart_select_skills_rolling():
+    """smart_select_skills detects rolling/MA code patterns."""
+    from agent.skills import smart_select_skills
+    result = smart_select_skills(code="df['ma20'] = df['close'].rolling(20).mean()", query="均线")
+    # Either rolling_indicators or backtest_ma_crossover is valid (both have rolling patterns)
+    assert any(s in result["selected_skills"] for s in ["rolling_indicators", "backtest_ma_crossover"])
+
+
+def test_smart_select_skills_statsmodels():
+    """smart_select_skills detects OLS regression patterns."""
+    from agent.skills import smart_select_skills
+    result = smart_select_skills(code="model = sm.OLS(y, X).fit()", query="alpha beta")
+    assert "statistical_analysis" in result["selected_skills"]
+
+
+def test_smart_select_skills_garch():
+    """smart_select_skills detects GARCH volatility patterns."""
+    from agent.skills import smart_select_skills
+    result = smart_select_skills(code="model = arch_model(returns, vol='Garch')", query="volatility")
+    assert "time_series_forecast" in result["selected_skills"]
+
+
+def test_smart_select_skills_backtest():
+    """smart_select_skills detects backtest patterns."""
+    from agent.skills import smart_select_skills
+    result = smart_select_skills(code="df['signal'] = entry_sig", query="回测 MACD")
+    assert any("backtest" in s for s in result["selected_skills"])
+
+
 def test_execute_python_error_hints_offset() -> None:
     out = execute_python("raise TypeError(\"StockStore.read() got an unexpected keyword argument 'offset'\")")
     assert out["success"] is False

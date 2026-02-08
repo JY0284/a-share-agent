@@ -1201,6 +1201,16 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     
     Only use Python when you need to COMPUTE (rolling, groupby, compare, rank, etc.)!
     
+    ## Skills - ALWAYS use tool_load_skill first!
+    Before writing Python code, use `tool_load_skill(skill_id)` to:
+    1. Show users which skill patterns you're following (transparency)
+    2. Get detailed code examples and best practices
+    
+    Available skills: rolling_indicators, backtest_ma_crossover, backtest_macd,
+    statistical_analysis, time_series_forecast, risk_metrics, etc.
+    
+    Use `tool_search_skills(query)` to find relevant skills.
+    
     ## FORBIDDEN - Do NOT write code like this:
     ```python
     # ❌ WRONG: Print-only code without using store
@@ -1216,15 +1226,11 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     2. Perform real calculations (rolling, groupby, comparisons, etc.)
     3. Output computed results, not hand-written text
     
-    ## Before Using This Tool
-    1. First call `tool_search_skills(query)` to find relevant coding patterns
-    2. Load useful skills with `tool_load_skill(skill_id)`
-    3. Apply skill guidance in your code
-    4. Pass `skills_used=[skill_id, ...]` when calling this tool
-    
     ## Pre-loaded Libraries
     - `pd` / `pandas`: Data manipulation
     - `np` / `numpy`: Numerical computation  
+    - `sm` / `statsmodels.api`: Statistical analysis (OLS, time series)
+    - `arch_model`: GARCH volatility models
     - `plt` / `matplotlib.pyplot`: Plotting (if needed)
     
     ## Stock Data Access via `store`
@@ -1311,13 +1317,29 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     
     Args:
         code: Python code that uses `store` to load and analyze data.
-        skills_used: List of skill IDs that guided this code (from tool_search_skills/tool_load_skill).
+        skills_used: List of skill IDs loaded via tool_load_skill before this call.
     
     Returns:
-        {"success": bool, "output": str, "error": str|None, "result": str, "skills_used": list}
+        {"success": bool, "output": str, "error": str|None, "result": str, "skills_used": list, "skill_hint": str|None}
     """
+    from agent.skills import smart_select_skills
+    
     out = execute_python(code)
     out["skills_used"] = skills_used or []
+    out["skill_hint"] = None
+    
+    # If no skills were explicitly used, detect relevant skills and add a hint
+    if not skills_used:
+        skill_selection = smart_select_skills(code=code, query="", max_skills=2)
+        recommended = skill_selection.get("selected_skills", [])
+        if recommended:
+            skill_list = ", ".join(f'"{s}"' for s in recommended)
+            out["skill_hint"] = (
+                f"[Skill Recommendation] Your code matches patterns from: {skill_list}. "
+                f"Next time, call `tool_load_skill({recommended[0]!r})` BEFORE writing Python "
+                f"to show users the skill patterns you're following and ensure best practices."
+            )
+    
     return out
 
 

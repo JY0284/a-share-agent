@@ -1,8 +1,7 @@
-````markdown
----
+﻿---
 name: time_series_forecast
 description: Time series forecasting for stock data - ARIMA, GARCH volatility models, exponential smoothing, and trend decomposition using statsmodels.
-tags: [forecast, ARIMA, GARCH, volatility, 预测, 波动率模型, time series, 时间序列, trend, seasonality]
+tags: [forecast, ARIMA, GARCH, volatility, 预测, 波动率模型, time_series, 时间序列, trend, seasonality]
 ---
 
 ## Core rule
@@ -278,5 +277,3 @@ print(fitted.summary())
 ## See also
 - `statistical_analysis`: regression, hypothesis tests
 - `risk_metrics`: historical volatility measures
-- `rolling_indicators`: technical indicator calculations
-````
