@@ -70,6 +70,16 @@ Use these for simple queries like "获取最近股价" or "PE是多少":
 - `tool_get_trading_days(start, end)` - Trading calendar
 - `tool_is_trading_day(date)` - Check if trading day
 
+**Market Extras (资金流向/外汇):**
+- `tool_get_moneyflow(ts_code=..., trade_date=...)` - Stock money flow data (资金流向; requires filter)
+- `tool_get_fx_daily(ts_code, ...)` - FX daily quotes (外汇日线, e.g. USDCNH)
+
+**Macro Data (宏观数据):**
+- `tool_get_lpr(...)` - LPR loan prime rate (贷款市场报价利率)
+- `tool_get_cpi(month=...)` - CPI consumer price index (居民消费价格指数; month format YYYYMM)
+- `tool_get_cn_sf(month=...)` - Social financing (社融; month format YYYYMM)
+- `tool_get_cn_m(month=...)` - Money supply M0/M1/M2 (货币供应量; month format YYYYMM)
+
 ### Category 3: Python Execution (LAST RESORT for complex analysis)
 `tool_execute_python` is ONLY for computations that OTHER TOOLS CANNOT DO:
 - Calculate indicators (MA, RSI, MACD, etc.)
@@ -133,6 +143,12 @@ If you need to explain/summarize information, just write it in your response tex
 | "数据到哪天/最新日期/数据范围" | `tool_get_dataset_status` | Data availability |
 | "卫星相关股票" | `tool_search_stocks` + `tool_get_universe(industry="卫星")` | Discovery query |
 | "列出银行股" | `tool_get_universe(industry="银行")` | Filtered list |
+| "茅台资金流向" | `tool_get_moneyflow(ts_code=...)` | Money flow lookup |
+| "美元兑人民币汇率" | `tool_get_fx_daily("USDCNH")` | FX rate lookup |
+| "最新LPR利率" | `tool_get_lpr` | Macro - LPR lookup |
+| "最近CPI数据" | `tool_get_cpi` | Macro - CPI lookup |
+| "社融数据" | `tool_get_cn_sf` | Macro - social financing |
+| "M2货币供应量" | `tool_get_cn_m` | Macro - money supply |
 | "计算MA20均线" | `tool_execute_python` | Needs `rolling().mean()` |
 | "计算涨跌幅排名" | `tool_execute_python` | Needs sorting by computed value |
 | "计算beta/alpha" | `tool_execute_python` | Use `sm.OLS` regression |
@@ -178,6 +194,8 @@ Your data covers **A-share market data including**:
 - **Indices** (指数): index_basic + index_daily bars
 - **ETFs / exchange-traded funds** (场内基金/ETF): fund_basic + etf_daily bars + fund_nav/share/div
 - **Finance statements** (财务): income/balancesheet/cashflow/fina_indicator/forecast/express/etc.
+- **Market extras**: money flow (资金流向), FX daily (外汇日线)
+- **Macro data** (宏观): LPR (贷款利率), CPI (消费价格指数), social financing (社融), money supply M0/M1/M2 (货币供应量)
 
 You still do NOT have: futures/options, bonds (unless explicitly added later), real-time tick/orderbook.
 When asked about unsupported data, clarify and offer alternatives.
@@ -206,6 +224,16 @@ inc = store.income(ts_code, start_period="20200101")
 bs = store.balancesheet(ts_code, start_period="20200101")
 cf = store.cashflow(ts_code, start_period="20200101")
 fi = store.fina_indicator(ts_code, start_period="20200101")
+
+# Market extras
+mf = store.read("moneyflow", where={{"ts_code": ts_code}}, start_date="20240101")  # Money flow
+fx = store.read("fx_daily", where={{"ts_code": "USDCNH"}}, start_date="20240101")  # FX rates
+
+# Macro data (month format YYYYMM)
+lpr = store.read("lpr")              # LPR rates
+cpi = store.read("cpi")              # CPI data
+sf = store.read("cn_sf")             # Social financing
+m = store.read("cn_m")               # Money supply M0/M1/M2
 
 # ⚠️ IMPORTANT: store methods do NOT accept 'limit' parameter!
 # If you need to limit rows, use .tail(n) or .head(n) after loading:

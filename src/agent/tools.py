@@ -55,6 +55,14 @@ from stock_data.agent_tools import (
     list_industries,
     resolve_symbol,
     search_stocks,
+    # Market Extras
+    get_moneyflow,
+    get_fx_daily,
+    # Macro
+    get_lpr,
+    get_cpi,
+    get_cn_sf,
+    get_cn_m,
 )
 
 from agent.sandbox import clear_python_session, execute_python
@@ -1077,6 +1085,207 @@ def tool_get_disclosure_date(
 
 
 # =============================================================================
+# MARKET EXTRAS TOOLS - Money flow, FX (资金流向/外汇)
+# =============================================================================
+
+
+@tool
+def tool_get_moneyflow(
+    ts_code: str | None = None,
+    trade_date: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get A-share stock money flow data (资金流向).
+
+    ⚠️ Requires at least one filter: ts_code, trade_date, or start_date/end_date.
+
+    Date format: YYYYMMDD.
+
+    Args:
+        ts_code: Stock ts_code (e.g. '600519.SH')
+        trade_date: Specific trading date
+        start_date: Start of range
+        end_date: End of range
+        offset: Skip first N rows
+        limit: Max rows (default 50, max 500)
+
+    Returns: {rows: [trade_date, ts_code, buy_sm_vol, sell_sm_vol, ...], ...}
+    """
+    return get_moneyflow(
+        ts_code=ts_code,
+        trade_date=trade_date,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=min(limit or 50, 500),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_fx_daily(
+    ts_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get FX daily quotes for a currency pair (外汇日线).
+
+    Date format: YYYYMMDD (GMT in upstream).
+
+    Args:
+        ts_code: Currency pair code (e.g. 'USDCNH' for USD/CNH)
+        start_date: Start date YYYYMMDD
+        end_date: End date YYYYMMDD
+        offset: Skip first N rows
+        limit: Max rows (default 50, max 500)
+
+    Returns: {rows: [trade_date, open, high, low, close, ...], ...}
+    """
+    return get_fx_daily(
+        ts_code,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=min(limit or 50, 500),
+        store_dir=STORE_DIR,
+    )
+
+
+# =============================================================================
+# MACRO TOOLS - LPR, CPI, Social Financing, Money Supply (宏观数据)
+# =============================================================================
+
+
+@tool
+def tool_get_lpr(
+    date: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get LPR (贷款市场报价利率) history.
+
+    Date format: YYYYMMDD.
+
+    Args:
+        date: Specific date
+        start_date: Start of range
+        end_date: End of range
+        offset: Skip first N rows
+        limit: Max rows (default 50, max 200)
+
+    Returns: {rows: [date, lpr_1y, lpr_5y, ...], ...}
+    """
+    return get_lpr(
+        date=date,
+        start_date=start_date,
+        end_date=end_date,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_cpi(
+    month: str | None = None,
+    start_month: str | None = None,
+    end_month: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get CPI (居民消费价格指数) history.
+
+    Month format: YYYYMM (e.g. '202601').
+
+    Args:
+        month: Specific month
+        start_month: Start of range
+        end_month: End of range
+        offset: Skip first N rows
+        limit: Max rows (default 50, max 200)
+
+    Returns: {rows: [month, nt_yoy, nt_mom, ...], ...}
+    """
+    return get_cpi(
+        month=month,
+        start_month=start_month,
+        end_month=end_month,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_cn_sf(
+    month: str | None = None,
+    start_month: str | None = None,
+    end_month: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get CN social financing (社融) monthly series.
+
+    Month format: YYYYMM (e.g. '202601').
+
+    Args:
+        month: Specific month
+        start_month: Start of range
+        end_month: End of range
+        offset: Skip first N rows
+        limit: Max rows (default 50, max 200)
+
+    Returns: {rows: [month, ...social financing components...], ...}
+    """
+    return get_cn_sf(
+        month=month,
+        start_month=start_month,
+        end_month=end_month,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+@tool
+def tool_get_cn_m(
+    month: str | None = None,
+    start_month: str | None = None,
+    end_month: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get CN money supply (货币供应量) monthly series (M0/M1/M2).
+
+    Month format: YYYYMM (e.g. '202601').
+
+    Args:
+        month: Specific month
+        start_month: Start of range
+        end_month: End of range
+        offset: Skip first N rows
+        limit: Max rows (default 50, max 200)
+
+    Returns: {rows: [month, m0, m1, m2, m0_yoy, m1_yoy, m2_yoy, ...], ...}
+    """
+    return get_cn_m(
+        month=month,
+        start_month=start_month,
+        end_month=end_month,
+        offset=offset,
+        limit=min(limit or 50, 200),
+        store_dir=STORE_DIR,
+    )
+
+
+# =============================================================================
 # SKILLS TOOLS - For discovering and loading agent skills
 # =============================================================================
 
@@ -1263,6 +1472,16 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     cf = store.cashflow(ts_code, start_period="20200101")
     fi = store.fina_indicator(ts_code, start_period="20200101")
     
+    # Market extras
+    mf = store.read("moneyflow", where={"ts_code": ts_code}, start_date="20240101")  # Money flow
+    fx = store.read("fx_daily", where={"ts_code": "USDCNH"}, start_date="20240101")  # FX rates
+    
+    # Macro data (month format YYYYMM)
+    lpr = store.read("lpr")              # LPR rates
+    cpi = store.read("cpi")              # CPI data
+    sf = store.read("cn_sf")             # Social financing
+    m = store.read("cn_m")               # Money supply M0/M1/M2
+    
     # Other
     df = store.stock_basic(ts_code=ts_code)
     df = store.stock_company(ts_code=ts_code)
@@ -1398,6 +1617,14 @@ ALL_TOOLS = [
     tool_get_fina_audit,
     tool_get_fina_mainbz,
     tool_get_disclosure_date,
+    # Market Extras (资金流向/外汇)
+    tool_get_moneyflow,
+    tool_get_fx_daily,
+    # Macro (宏观数据)
+    tool_get_lpr,
+    tool_get_cpi,
+    tool_get_cn_sf,
+    tool_get_cn_m,
     # Calendar
     tool_get_trading_days,
     tool_is_trading_day,
