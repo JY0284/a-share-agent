@@ -20,8 +20,9 @@ from typing import Any
 
 
 def _default_trace_dir() -> Path:
+    # Save traces in parent dir of repo to avoid file watcher
     # a-share-agent/src/agent/trace.py -> parents[2] is repo root
-    return Path(__file__).resolve().parents[2] / "traces"
+    return Path(__file__).resolve().parents[3] / "a-share-agent-traces"
 
 
 def _json_default(o: Any) -> str:

@@ -25,21 +25,6 @@ TContext = TypeVar("TContext")
 TState = TypeVar("TState")
 
 
-def _safe_messages_preview(messages: list[BaseMessage], *, max_chars: int = 2000) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    used = 0
-    for m in messages:
-        content = getattr(m, "content", None)
-        content_str = content if isinstance(content, str) else str(content)
-        remain = max(0, max_chars - used)
-        if remain <= 0:
-            break
-        snippet = content_str[:remain]
-        used += len(snippet)
-        out.append({"type": m.__class__.__name__, "content": snippet})
-    return out
-
-
 def _tool_calls_preview(msg: BaseMessage) -> list[dict[str, Any]] | None:
     """Extract tool call info from an AIMessage if present."""
     if not isinstance(msg, AIMessage):
@@ -319,7 +304,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
                     "event": "model_start",
                     "model": getattr(request.model, "model", None) or request.model.__class__.__name__,
                     "tool_count": len(request.tools or []),
-                    "messages_preview": _safe_messages_preview(request.messages),
+                    "message_count": len(request.messages) if request.messages else 0,
                 },
             )
         except Exception:
@@ -336,19 +321,17 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
 
             model_end: dict[str, Any] = {
                 "event": "model_end",
-                "result_preview": _safe_messages_preview(resp.result),
+                "result_count": len(resp.result) if resp.result else 0,
                 "structured_response": resp.structured_response,
             }
             if agg:
                 model_end.update(agg)
 
-            # response is list[BaseMessage]; preview for size
-            self._writer.write_event(run_id, model_end)
-
             # Log each outbound message from the model (usually AIMessage)
             for m in resp.result:
-                # Keep only AI/tool messages (but safe to log all)
                 self._writer.write_event(run_id, _message_event(m, direction="out"))
+
+            self._writer.write_event(run_id, model_end)
         except Exception:
             pass
 
@@ -374,7 +357,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
                     "event": "model_start",
                     "model": getattr(request.model, "model", None) or request.model.__class__.__name__,
                     "tool_count": len(request.tools or []),
-                    "messages_preview": _safe_messages_preview(request.messages),
+                    "message_count": len(request.messages) if request.messages else 0,
                 },
             )
         except Exception:
@@ -390,15 +373,15 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
 
             model_end: dict[str, Any] = {
                 "event": "model_end",
-                "result_preview": _safe_messages_preview(resp.result),
+                "result_count": len(resp.result) if resp.result else 0,
                 "structured_response": resp.structured_response,
             }
             if agg:
                 model_end.update(agg)
 
-            self._writer.write_event(run_id, model_end)
             for m in resp.result:
                 self._writer.write_event(run_id, _message_event(m, direction="out"))
+            self._writer.write_event(run_id, model_end)
         except Exception:
             pass
 
