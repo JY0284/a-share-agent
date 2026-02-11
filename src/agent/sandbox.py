@@ -145,6 +145,22 @@ def _enhance_error_message(err: str) -> str:
     if "Invalid comparison between dtype=str and int" in err or "not supported between instances of 'str' and 'int'" in err:
         hints.append("日期列请统一类型：推荐把 trade_date/end_date 转成 YYYYMMDD 的 int（例如 df['trade_date']=df['trade_date'].astype(str).str.replace('-', '').astype(int)）。")
 
+    # Float vs str comparison (also a dtype mismatch)
+    if "not supported between instances of 'float' and 'str'" in err:
+        hints.append("数值与字符串比较错误：请确保比较的两边类型一致（都是数值或都是字符串）。")
+
+    # ETF adj_factor misuse
+    if "etf_daily" in err and ("adj" in err.lower() or "复权" in err):
+        hints.append("ETF 没有复权因子 (adj_factor)；直接用 store.etf_daily(ts_code) 获取价格即可（ETF 不拆股，无需复权）。")
+    if "'StockStore' object has no attribute 'etf_adj'" in err or "'StockStore' object has no attribute 'fund_daily_adj'" in err:
+        hints.append("store 没有 etf_adj/fund_daily_adj 方法；ETF 不需要复权，直接用 store.etf_daily(ts_code) 获取原始价格。")
+    if "'StockStore' object has no attribute 'etf_daily'" in err:
+        hints.append("store.etf_daily(ts_code) 是正确的 ETF 日线方法；请检查 ts_code 格式（如 510300.SH）。")
+
+    # IndexError on empty DataFrame
+    if "IndexError" in err and "out-of-bounds" in err:
+        hints.append("IndexError 通常表示 DataFrame 为空或筛选后无数据；请先检查 df.empty 或 len(df)，再使用 iloc 访问。")
+
     # Optional deps
     if "No module named 'matplotlib'" in err:
         hints.append("环境缺少 matplotlib；如不画图请删掉 import/绘图代码，或安装依赖后再运行。")

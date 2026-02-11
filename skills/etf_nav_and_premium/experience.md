@@ -6,8 +6,12 @@ tags: [etf, fund_basic, etf_daily, fund_nav, nav, premium, discount, 份额, 净
 
 ## Core rule
 ETF analysis often needs **two time series**:
-- **Market price bars**: `store.read("etf_daily", where={"ts_code": ...})`
-- **NAV**: `store.fund_nav(ts_code, ...)`
+- **Market price bars**: `store.etf_daily(ts_code, start_date=..., end_date=...)`
+- **NAV**: `store.fund_nav(ts_code, start_date=..., end_date=...)`
+
+**⚠️ ETFs do NOT have 复权因子 (adj_factor)** - they don't split like stocks.
+- For stocks: use `store.daily_adj(ts_code, how="hfq")` for backward-adjusted prices
+- For ETFs: use `store.etf_daily(ts_code)` directly - prices are already "clean"
 
 Only compute “premium/discount” if the columns you need are actually present in your stored datasets.
 
@@ -24,7 +28,10 @@ hit.head(10)
 ### Compute ETF price returns from `etf_daily`
 
 ```python
-px = store.read("etf_daily", where={"ts_code": "510300.SH"}, start_date="20230101")
+# ✅ Use store.etf_daily() method (NOT store.read with where)
+px = store.etf_daily("510300.SH", start_date="20230101")
+if px.empty:
+    raise ValueError("No etf_daily data for 510300.SH")
 px = px.sort_values("trade_date")
 px["ret_20d"] = px["close"].pct_change(20)
 px[["trade_date", "close", "ret_20d"]].dropna().tail(20)
@@ -33,25 +40,31 @@ px[["trade_date", "close", "ret_20d"]].dropna().tail(20)
 ### Join price and NAV on date (best-effort)
 
 ```python
-px = store.read("etf_daily", where={"ts_code": "510300.SH"}, start_date="20230101")[["trade_date", "close"]].copy()
-px["trade_date"] = px["trade_date"].astype(str)
+px = store.etf_daily("510300.SH", start_date="20230101")[["trade_date", "close"]].copy()
+if px.empty:
+    raise ValueError("No etf_daily data")
+px["trade_date"] = px["trade_date"].astype(str).str.replace("-", "")
 px = px.sort_values("trade_date")
 
 nav = store.fund_nav("510300.SH", start_date="20230101")
-# nav_date is typically the NAV date column
-nav["nav_date"] = nav["nav_date"].astype(str)
+if nav.empty:
+    print("No fund_nav data; using price returns only")
+else:
+    # nav_date is typically the NAV date column
+    nav["nav_date"] = nav["nav_date"].astype(str).str.replace("-", "")
+    merged = px.merge(nav, left_on="trade_date", right_on="nav_date", how="inner")
 
-merged = px.merge(nav, left_on="trade_date", right_on="nav_date", how="inner")
-
-# If unit_nav exists, compute price-to-nav ratio (not always 1:1 units; interpret carefully)
-if "unit_nav" in merged.columns:
-    merged["price_to_unit_nav"] = merged["close"] / merged["unit_nav"]
-
-merged.tail(20)
+    # If unit_nav exists, compute price-to-nav ratio (not always 1:1 units; interpret carefully)
+    if "unit_nav" in merged.columns:
+        merged["price_to_unit_nav"] = merged["close"] / merged["unit_nav"]
+    merged.tail(20)
 ```
 
 ## Common bugs to avoid
 - Assuming NAV has the same calendar as trading days (it often does, but confirm).
 - Assuming premium/discount can be computed without the right NAV fields.
 - Forgetting to sort before `pct_change`.
+- **Comparing string dates with int literals** (normalize types first).
+- Calling `store.daily_adj()` for ETFs (ETFs don't have adj_factor; use `store.etf_daily()`).
+- Using `store.read("etf_daily", where={...})` instead of `store.etf_daily(ts_code)` (use the method).
 

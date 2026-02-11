@@ -206,18 +206,28 @@ When asked about unsupported data, clarify and offer alternatives.
 # Pre-loaded: pd, np, scipy, sm (statsmodels.api), arch_model, store
 
 # Load data
-df = store.daily(ts_code)           # Daily prices
+df = store.daily(ts_code)           # Daily prices (unadjusted)
 df = store.daily_basic(ts_code)     # Valuation metrics
-df = store.daily_adj(ts_code, how="qfq")  # Adjusted prices
+df = store.daily_adj(ts_code, how="hfq")  # 后复权 (backward-adj) - REQUIRED for backtesting!
+df = store.daily_adj(ts_code, how="qfq")  # 前复权 (forward-adj) - for charting only
+
+# ⚠️ CRITICAL: Use hfq (后复权) for all backtests/return calculations!
+# - hfq: old prices unchanged, new prices adjusted up → shows true cumulative returns
+# - qfq: new prices unchanged, old prices adjusted down → start point floats (bad for backtest)
 
 # Index (指数)
 idx = store.read("index_basic")     # Discover index codes
 df = store.index_daily("000300.SH", start_date="20230101")
 
-# ETF / fund
+# ETF / fund (⚠️ ETFs have NO adj_factor - use raw prices)
 fb = store.read("fund_basic")       # Discover ETF codes
-etf_px = store.read("etf_daily", where={{"ts_code": "510300.SH"}}, start_date="20230101")
-nav = store.fund_nav("510300.SH", start_date="20230101")  # May be empty if not stored
+etf_px = store.etf_daily("510300.SH", start_date="20230101")  # Use this method!
+nav = store.fund_nav("510300.SH", start_date="20230101")  # NAV if available
+
+# ⚠️ Date comparison: trade_date is often string! Normalize before comparing with int:
+# WRONG: df[df["trade_date"] >= 20240101]  # TypeError if string!
+# RIGHT: df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").astype(int)
+#        df[df["trade_date"] >= 20240101]  # Now works
 
 # Finance (report-period end_date, not trading days)
 inc = store.income(ts_code, start_period="20200101")

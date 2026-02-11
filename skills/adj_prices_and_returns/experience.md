@@ -32,10 +32,44 @@ for c in ["ret_1d", "ret_20d"]:
 out = out.rename(columns={"ret_1d": "ret_1d(%)", "ret_20d": "ret_20d(%)"})
 ```
 
+## ⚠️ Date comparison (CRITICAL)
+Date columns (`trade_date`, `end_date`) are often strings. **Always convert to int before comparing with int literals.**
+
+```python
+# WRONG - comparing string to int raises TypeError
+df[df["trade_date"] >= 20240101]  # ❌ TypeError if trade_date is string
+
+# RIGHT - ensure both are same type
+df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").astype(int)
+df[df["trade_date"] >= 20240101]  # ✅ Works correctly
+
+# OR use string comparison (also works)
+df[df["trade_date"].astype(str) >= "20240101"]  # ✅ String comparison
+```
+
+## ETF/Fund adjusted prices (复权)
+**ETFs do NOT have 复权因子 (adj_factor)**. They don't split like stocks.
+
+- For **stocks**: use `store.daily_adj(ts_code, how="hfq")` for backward-adjusted prices
+- For **ETFs**: use raw prices from `store.etf_daily(ts_code)` directly
+  - ETF prices are already "clean" (no splits to adjust for)
+  - If you need NAV-based returns, use `store.fund_nav(ts_code)` instead
+
+```python
+# Stock: use 后复权 (hfq) for backtesting
+df_stock = store.daily_adj("600519.SH", how="hfq", start_date="20200101")
+
+# ETF: use etf_daily directly (no adj needed)
+df_etf = store.etf_daily("510300.SH", start_date="20200101")
+```
+
 ## Common bugs to avoid
-- Mixing unadjusted prices with “total return” claims.
+- Mixing unadjusted prices with "total return" claims.
 - Computing returns on unsorted data (always sort by `trade_date` ascending first).
+- **Comparing string dates with int literals** (always normalize types first).
+- Calling `store.daily_adj()` for ETFs (use `store.etf_daily()` instead).
 
 ## See also
 - `trading_day_windows`: build windows using trading days
+- `etf_nav_and_premium`: ETF-specific data access patterns
 

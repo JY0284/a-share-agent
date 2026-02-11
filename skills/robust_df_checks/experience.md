@@ -34,9 +34,36 @@ if missing:
 ```python
 df = df.sort_values(\"trade_date\")
 ```
+### ⚠️ Date type normalization (CRITICAL)
+Date columns (`trade_date`, `end_date`, etc.) are often strings. **Comparing them with int literals causes TypeError.**
 
+```python
+# WRONG - raises TypeError: '<' not supported between 'str' and 'int'
+df[df["trade_date"] >= 20240101]  # ❌
+
+# RIGHT - normalize to int first
+df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").astype(int)
+df[df["trade_date"] >= 20240101]  # ✅
+
+# OR use string comparison (works if format is consistent YYYYMMDD)
+df[df["trade_date"].astype(str) >= "20240101"]  # ✅
+```
+
+### Safe iloc access (avoid IndexError on empty df)
+
+```python
+# WRONG - crashes if df is empty
+first_row = df.iloc[0]  # ❌ IndexError if df.empty
+
+# RIGHT - check first
+if not df.empty:
+    first_row = df.iloc[0]
+else:
+    raise ValueError("DataFrame is empty, cannot access first row")
+```
 ## Common bugs to avoid
 - Using `.iloc[0]` on empty df (crash).
 - Assuming a field exists across all datasets.
 - Rolling indicators on unsorted dates.
+- **Comparing string date columns with int literals** (always normalize types first).
 

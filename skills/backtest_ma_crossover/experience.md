@@ -33,13 +33,18 @@ Backtests need a canonical code like `600519.SH` / `300888.SZ`.
 
 ## Recommended patterns
 
-### 1) Load data (prefer adjusted prices for returns)
+### 1) Load data (MUST use 后复权/hfq for backtesting)
+
+**⚠️ 回测必须使用后复权价格 (hfq)** 以正确计算分红送转后的累计收益率。
+- 前复权 (qfq): 新价不变，旧价折算 → 适合“看图”（起点浮动）
+- **后复权 (hfq)**: 旧价不变，新价上调 → **适合回测**（起点固定，结束点反映真实收益）
 
 ```python
 ts_code = "600519.SH"
 start_date, end_date = "20220101", None
 
-df = store.daily_adj(ts_code, how="qfq", start_date=start_date, end_date=end_date)
+# ✅ MUST use hfq for backtesting
+df = store.daily_adj(ts_code, how="hfq", start_date=start_date, end_date=end_date)
 if df.empty:
     raise ValueError(f"No daily_adj data for {ts_code} since {start_date}")
 
@@ -49,6 +54,16 @@ if missing:
     raise KeyError(f"Missing columns {missing}; got {df.columns.tolist()}")
 
 df = df.sort_values("trade_date").reset_index(drop=True)
+```
+
+**For ETFs:** ETFs don't have 复权因子，直接使用 `store.etf_daily(ts_code)`（ETF价格无需复权）。
+
+```python
+# For ETF backtesting (no adj needed)
+df_etf = store.etf_daily("510300.SH", start_date="20220101")
+if df_etf.empty:
+    raise ValueError(f"No etf_daily data for ETF")
+df_etf = df_etf.sort_values("trade_date").reset_index(drop=True)
 ```
 
 ### 2) MA crossover signals (no lookahead)
@@ -128,11 +143,26 @@ summary = {
 print(pd.DataFrame([summary]).to_string(index=False))
 ```
 
+## ⚠️ Date dtype comparison (CRITICAL)
+Date columns are often strings. Always normalize before comparing with int:
+
+```python
+# WRONG - raises TypeError if trade_date is string type
+df[df["trade_date"] >= 20240101]  # ❌
+
+# RIGHT - convert to int first
+df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").astype(int)
+df[df["trade_date"] >= 20240101]  # ✅
+```
+
 ## Common bugs to avoid
 - Using `.pct_change()` or `.rolling()` on unsorted `trade_date`.
 - Forgetting `shift(1)` for execution (future leak).
 - Mixing tool params with store params (store has no `limit`).
-- Backtesting on unadjusted prices while claiming “total return”.
+- Backtesting on unadjusted prices while claiming "total return".
+- **Using qfq instead of hfq for backtesting** (qfq has floating start point).
+- **Comparing string trade_date with int literals** (normalize types first).
+- Calling `store.daily_adj()` for ETFs (use `store.etf_daily()` directly).
 
 ## See also
 - `rolling_indicators`: how to compute MA safely (enough history)
