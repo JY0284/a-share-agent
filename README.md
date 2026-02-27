@@ -6,9 +6,22 @@ A professional A-share (Chinese stock market) financial analysis agent powered b
 
 - **Stock Information**: Query stock basic info, company profiles, and name change history
 - **Price Data**: Daily, weekly, and monthly OHLCV prices with adjustment options
-- **Valuation Metrics**: PE, PB, market cap, turnover rates, and more
+- **Valuation Metrics**: PE, PB, market cap, turnover rates, financials, and more
+- **Macro & Market Data**: Money flow, Forex rates, LPR, CPI, Social Financing, and Money Supply
+- **Advanced Visualization**: Automatic capture of matplotlib figures and seaborn integration
+- **Statistical Analysis**: Robust statistical tools and GARCH modeling capabilities
+- **Trace Analysis**: Trace failure triage workflows and intent extraction
 - **Trading Calendar**: Check trading days, previous/next trading dates
 - **Bilingual Support**: Responds in Chinese or English based on user input
+
+## Recent Updates
+
+- **Visualization**: Enhanced figure storage and visualization capabilities with automatic capture of matplotlib figures and seaborn integration.
+- **Trace Analysis**: Improved user intent extraction and reporting in trace failure triage workflow.
+- **Documentation**: Enhanced documentation on date handling and ETF pricing methods.
+- **Micro/Macro Analysis**: Added market extras (money flow, forex) and macro data tools (LPR, CPI, etc.).
+- **Middleware**: Implemented skill auto-injection middleware and enhanced skill selection logic.
+- **Statistics**: Added statistical analysis and GARCH modeling capabilities.
 
 ## Architecture
 
@@ -119,8 +132,10 @@ a-share-agent/
 | Tool | Description |
 |------|-------------|
 | `tool_resolve_symbol` | Convert symbol to ts_code |
-| `tool_get_stock_basic` | Stock basic information |
+| `tool_get_stock_basic_detail` | Stock basic information |
 | `tool_get_stock_company` | Company profile |
+| `tool_get_index_basic` | Index basic information |
+| `tool_get_fund_basic` | Fund basic information |
 | `tool_get_universe` | Filter stock universe |
 | `tool_get_trading_days` | Get trading days in range |
 | `tool_is_trading_day` | Check if date is trading day |
@@ -133,6 +148,12 @@ a-share-agent/
 | `tool_get_suspend_d` | Suspension events |
 | `tool_get_new_share` | IPO information |
 | `tool_get_namechange` | Name change history |
+| `tool_get_moneyflow` | Stock money flow data |
+| `tool_get_fx_daily` | Forex daily rates |
+| `tool_get_lpr` | Loan Prime Rate (LPR) |
+| `tool_get_cpi` | Consumer Price Index (CPI) |
+| `tool_get_cn_sf` | Social Financing data |
+| `tool_get_cn_m` | Money Supply data |
 
 ## License
 
