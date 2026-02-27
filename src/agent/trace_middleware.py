@@ -17,7 +17,7 @@ from langchain.agents.middleware.types import (
     ToolCallRequest,
 )
 
-from agent.sandbox import set_python_session_id
+from agent.sandbox import set_python_session_id, set_thread_id
 from agent.trace import get_trace_writer
 from agent.usage_cost import compute_usage_and_cost
 
@@ -283,6 +283,37 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         self._trace_id_var.set(new_id)
         return new_id
 
+    def _get_thread_id(self, runtime: Any) -> str | None:
+        """Extract the actual LangGraph thread_id from runtime config."""
+        config = getattr(runtime, "config", None)
+        if config is None:
+            print(f"[DEBUG] _get_thread_id: runtime has no config attr")
+            return None
+        
+        # config could be a dict or a TypedDict/object
+        if isinstance(config, dict):
+            conf = config.get("configurable")
+        else:
+            conf = getattr(config, "configurable", None)
+        
+        if conf is None:
+            print(f"[DEBUG] _get_thread_id: config has no configurable, config type={type(config)}, config={config}")
+            return None
+        
+        # configurable could be a dict or object
+        if isinstance(conf, dict):
+            tid = conf.get("thread_id")
+        else:
+            tid = getattr(conf, "thread_id", None)
+        
+        if tid:
+            print(f"[DEBUG] _get_thread_id: found thread_id={tid}")
+            return str(tid)
+        else:
+            keys = list(conf.keys()) if isinstance(conf, dict) else [a for a in dir(conf) if not a.startswith('_')]
+            print(f"[DEBUG] _get_thread_id: configurable has no thread_id, keys={keys}")
+        return None
+
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -290,6 +321,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
     ):
         run_id = self._trace_id(request.runtime, state=getattr(request, "state", None))
         set_python_session_id(run_id)
+        
+        # Set the actual thread_id for figure storage (separate from trace_id)
+        actual_thread_id = self._get_thread_id(request.runtime)
+        if actual_thread_id:
+            set_thread_id(actual_thread_id)
+        
         try:
             # Log the latest inbound message (usually HumanMessage or ToolMessage)
             if request.messages:
@@ -345,6 +382,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         """Async version of wrap_model_call for async agent execution contexts."""
         run_id = self._trace_id(request.runtime, state=getattr(request, "state", None))
         set_python_session_id(run_id)
+        
+        # Set the actual thread_id for figure storage (separate from trace_id)
+        actual_thread_id = self._get_thread_id(request.runtime)
+        if actual_thread_id:
+            set_thread_id(actual_thread_id)
+        
         try:
             if request.messages:
                 self._writer.write_event(
@@ -396,6 +439,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         runtime = getattr(request, "runtime", None)
         run_id = self._trace_id(runtime, state=getattr(request, "state", None))
         set_python_session_id(run_id)
+        
+        # Set the actual thread_id for figure storage (separate from trace_id)
+        actual_thread_id = self._get_thread_id(runtime)
+        if actual_thread_id:
+            set_thread_id(actual_thread_id)
+        
         tool_call = request.tool_call or {}
         name = tool_call.get("name")
         args = tool_call.get("args")
@@ -454,6 +503,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         runtime = getattr(request, "runtime", None)
         run_id = self._trace_id(runtime, state=getattr(request, "state", None))
         set_python_session_id(run_id)
+        
+        # Set the actual thread_id for figure storage (separate from trace_id)
+        actual_thread_id = self._get_thread_id(runtime)
+        if actual_thread_id:
+            set_thread_id(actual_thread_id)
+        
         tool_call = request.tool_call or {}
         name = tool_call.get("name")
         args = tool_call.get("args")

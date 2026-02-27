@@ -5,10 +5,13 @@ Provides a safe(r) execution environment with:
 - Access to StockStore for loading A-share data
 - Timeout and output capture
 - Session-scoped namespace so variables persist across tool_execute_python calls in the same agent thread
+- Automatic capture of matplotlib figures as base64-encoded images
+- Optional seaborn (`sns`) support for higher-level statistical plotting
 """
 
 from __future__ import annotations
 
+import base64
 import io
 import os
 import tempfile
@@ -35,6 +38,9 @@ _store = None
 # Session id for this request (set by middleware from thread_id / trace id)
 _python_session_id_var: ContextVar[str | None] = ContextVar("python_session_id", default=None)
 
+# Thread id for figure storage (the actual LangGraph thread_id, not trace_id)
+_thread_id_var: ContextVar[str | None] = ContextVar("thread_id", default=None)
+
 # One namespace per session: session_id -> dict (same as exec() globals)
 _session_namespaces: dict[str, dict[str, Any]] = {}
 
@@ -42,6 +48,16 @@ _session_namespaces: dict[str, dict[str, Any]] = {}
 def set_python_session_id(session_id: str) -> None:
     """Set the current Python execution session id (called by middleware from thread_id)."""
     _python_session_id_var.set(session_id)
+
+
+def set_thread_id(thread_id: str) -> None:
+    """Set the actual LangGraph thread_id for figure storage."""
+    _thread_id_var.set(thread_id)
+
+
+def get_thread_id() -> str | None:
+    """Return the actual thread_id for figure storage, or None if not set."""
+    return _thread_id_var.get()
 
 
 def get_python_session_id() -> str | None:
@@ -212,9 +228,111 @@ def _create_base_namespace() -> dict[str, Any]:
         import matplotlib.pyplot as plt
         namespace["plt"] = plt
         namespace["matplotlib"] = matplotlib
+
+        # Seaborn is optional, but when present expose it as `sns`.
+        # Import it only after matplotlib backend is configured.
+        try:
+            import seaborn as sns
+
+            # Make plots look reasonable by default; users can override.
+            sns.set_theme()
+            namespace["sns"] = sns
+            namespace["seaborn"] = sns
+        except ImportError:
+            pass
     except ImportError:
         pass
     return namespace
+
+
+def _capture_matplotlib_figures(namespace: dict[str, Any], thread_id: str | None = None) -> list[dict[str, Any]]:
+    """Capture all open matplotlib figures, save to disk, and return metadata.
+    
+    Figures are saved to the filesystem via the figures service for persistent storage.
+    The returned metadata includes URLs for frontend display.
+    
+    Args:
+        namespace: Execution namespace containing plt module
+        thread_id: Thread ID for organizing figures (uses current session if not provided)
+    
+    Returns:
+        List of dicts with keys:
+        - "id": unique figure ID (e.g., "fig_abc12345")
+        - "url": API URL to fetch the image (e.g., "/api/figures/{thread_id}/{fig_id}")
+        - "title": figure title or default "Figure N"
+        - "format": "png"
+        - "reference": formatted reference for agent responses (e.g., "[[fig:fig_abc12345|Title]]")
+    """
+    figures: list[dict[str, Any]] = []
+    
+    plt = namespace.get("plt")
+    if plt is None:
+        return figures
+    
+    # Import figure storage service
+    from agent.figures import save_figure, get_figure_url, format_figure_reference, get_thread_id as get_fig_thread_id
+    
+    # Determine thread ID - prefer the actual thread_id from set_thread_id() over the passed parameter
+    # get_thread_id() returns the actual LangGraph thread_id set by middleware
+    # The thread_id parameter may be the session_id/trace_id which is different
+    sandbox_thread_id = get_thread_id()
+    fig_thread_id = get_fig_thread_id()
+    session_id = get_python_session_id()
+    print(f"[DEBUG] _capture_matplotlib_figures: thread_id={thread_id}, sandbox_thread_id={sandbox_thread_id}, fig_thread_id={fig_thread_id}, session_id={session_id}")
+    # Priority: actual thread_id from middleware > passed thread_id > fallbacks
+    tid = sandbox_thread_id or thread_id or fig_thread_id or session_id or "default"
+    print(f"[DEBUG] Using tid={tid} for figure storage")
+    
+    try:
+        # Get all open figure numbers
+        fig_nums = plt.get_fignums()
+        for i, num in enumerate(fig_nums):
+            fig = plt.figure(num)
+            
+            # Get title from figure or axes
+            title = fig.get_suptitle() or ""
+            if not title and fig.axes:
+                title = fig.axes[0].get_title() or ""
+            if not title:
+                title = f"Figure {i + 1}"
+            
+            # Save figure to bytes buffer as PNG
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+            buf.seek(0)
+            
+            # Encode as base64 for storage
+            img_base64 = base64.b64encode(buf.read()).decode("utf-8")
+            buf.close()
+            
+            # Save to filesystem and get metadata
+            fig_meta = save_figure(
+                image_base64=img_base64,
+                title=title,
+                format="png",
+                thread_id=tid,
+            )
+            
+            # Build figure info with URL
+            fig_id = fig_meta["id"]
+            figures.append({
+                "id": fig_id,
+                "url": get_figure_url(tid, fig_id),
+                "title": title,
+                "format": "png",
+                "reference": format_figure_reference(fig_id, title),
+                # Keep base64 for backward compatibility (artifact display)
+                "image": img_base64,
+            })
+        
+        # Close all figures to free memory
+        plt.close("all")
+        
+    except Exception:
+        # If anything fails, just return empty list
+        pass
+    
+    return figures
 
 
 def execute_python(code: str, session_id: str | None = None, timeout_seconds: int = 60) -> dict[str, Any]:
@@ -230,7 +348,8 @@ def execute_python(code: str, session_id: str | None = None, timeout_seconds: in
     - `sm`: statsmodels.api (OLS, add_constant, time series, etc.)
     - `arch_model`: arch.arch_model (GARCH volatility models)
     - `store`: StockStore instance for data access
-    - `plt`: matplotlib.pyplot (if available)
+    - `plt`: matplotlib.pyplot
+    - `sns`: seaborn
     
     Args:
         code: Python code to execute
@@ -259,6 +378,7 @@ def execute_python(code: str, session_id: str | None = None, timeout_seconds: in
     result = None
     error = None
     success = False
+    figures: list[dict[str, Any]] = []  # List of figure metadata with URLs
     
     try:
         with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
@@ -272,6 +392,9 @@ def execute_python(code: str, session_id: str | None = None, timeout_seconds: in
             # Or check for '_' (last expression in interactive mode)
             elif "_" in namespace:
                 result = namespace["_"]
+        
+        # Capture any matplotlib figures that were created
+        figures = _capture_matplotlib_figures(namespace, session_id)
         
         success = True
         
@@ -313,4 +436,5 @@ def execute_python(code: str, session_id: str | None = None, timeout_seconds: in
         "output": output.strip() if output else None,
         "error": error,
         "result": result_str,
+        "figures": figures if figures else None,  # List of figure metadata with URLs and references
     }

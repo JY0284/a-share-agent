@@ -1397,8 +1397,8 @@ def tool_get_next_trade_date(date: str) -> dict:
 # =============================================================================
 
 
-@tool
-def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict:
+@tool(response_format="content_and_artifact")
+def tool_execute_python(code: str, skills_used: list[str] | None = None) -> tuple[dict, dict]:
     """Execute Python code for CALCULATIONS that other tools CANNOT do.
     
     ⚠️ THIS IS A LAST RESORT TOOL - only use when other tools cannot answer!
@@ -1440,7 +1440,67 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
     - `np` / `numpy`: Numerical computation  
     - `sm` / `statsmodels.api`: Statistical analysis (OLS, time series)
     - `arch_model`: GARCH volatility models
-    - `plt` / `matplotlib.pyplot`: Plotting (if needed)
+    - `plt` / `matplotlib.pyplot`: Plotting/charting
+    
+    ## 📊 Creating Charts (Automatic Figure Capture)
+    
+    Matplotlib figures are **automatically captured** and saved to persistent storage.
+    Each figure gets a unique ID and URL for frontend display.
+    
+    **When to create charts:**
+    - Backtests: equity curves, drawdown charts
+    - Comparisons: multi-stock performance overlay
+    - Trends: price with MA/Bollinger/MACD indicators
+    - Analysis: correlation heatmaps, return distributions
+    
+    **Rules for plotting:**
+    1. Set a descriptive `plt.title()` - it appears as the chart caption
+    2. Use `plt.tight_layout()` before finishing
+    3. Do NOT call `plt.show()` or `plt.savefig()` - figures are captured automatically
+    4. For Chinese text, set font at start:
+       ```python
+       plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "sans-serif"]
+       plt.rcParams["axes.unicode_minus"] = False
+       ```
+    
+    **Referencing figures in your response:**
+    After execution, the tool result includes `generated_figures` list with each figure's reference.
+    **COPY the `reference` string into your response** - the frontend renders it as a clickable thumbnail!
+    
+    Tool result example:
+    ```json
+    "generated_figures": [{"id": "fig_9a8b7c", "title": "策略回测", "reference": "[[fig:fig_9a8b7c|策略回测]]"}]
+    ```
+    
+    Your response should include the reference from the result:
+    ```
+    回测结果如下：
+    
+    [[fig:fig_9a8b7c|策略回测]]
+    
+    从图中可以看出，策略年化收益率为...
+    ```
+    
+    **Backtest example with equity curve:**
+    ```python
+    plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "sans-serif"]
+    plt.rcParams["axes.unicode_minus"] = False
+    
+    # ... backtest logic producing df with 'equity' column ...
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    ax1.plot(df["trade_date"], df["equity"], label="策略净值")
+    ax1.set_title("MA双均线策略回测 - 600519.SH")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    ax2.fill_between(df["trade_date"], df["drawdown"], 0, alpha=0.5, color="red")
+    ax2.set_title("回撤")
+    ax2.set_ylabel("回撤 %")
+    plt.tight_layout()
+    ```
+    
+    Load `tool_load_skill("plotting_charts")` for more chart patterns.
     
     ## Stock Data Access via `store`
     ```python
@@ -1539,7 +1599,12 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
         skills_used: List of skill IDs loaded via tool_load_skill before this call.
     
     Returns:
-        {"success": bool, "output": str, "error": str|None, "result": str, "skills_used": list, "skill_hint": str|None}
+        Tuple of (content, artifact):
+        - content: {"success": bool, "output": str, "error": str|None, "result": str, "skills_used": list, "skill_hint": str|None}
+          This is sent to the LLM as the tool result.
+        - artifact: {"figures": list|None}
+          This is stored in ToolMessage.artifact for frontend display, NOT sent to LLM.
+          figures: [{"image": "<base64>", "title": "Figure title", "format": "png"}, ...]
     """
     from agent.skills import smart_select_skills
     
@@ -1559,7 +1624,27 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> dict
                 f"to show users the skill patterns you're following and ensure best practices."
             )
     
-    return out
+    # Separate figures (for frontend display) from content (for LLM)
+    # This prevents large base64 images from being sent to LLM on subsequent calls
+    figures = out.pop("figures", None)
+    artifact = {"figures": figures} if figures else {}
+    
+    # Include figure references in content for LLM (without base64 images)
+    # This allows the agent to reference figures in its response using [[fig:id|title]]
+    if figures:
+        figure_refs = []
+        for fig in figures:
+            fig_id = fig.get("id", "")
+            title = fig.get("title", "Figure")
+            reference = fig.get("reference", f"[[fig:{fig_id}|{title}]]")
+            figure_refs.append({
+                "id": fig_id,
+                "title": title,
+                "reference": reference,
+            })
+        out["generated_figures"] = figure_refs
+    
+    return out, artifact
 
 
 @tool
