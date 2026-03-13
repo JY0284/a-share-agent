@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,15 +34,27 @@ def _json_default(o: Any) -> str:
 @dataclass
 class TraceWriter:
     trace_dir: Path
+    _run_paths: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.trace_dir.mkdir(parents=True, exist_ok=True)
 
     def path_for_run(self, run_id: str) -> Path:
+        """Return (and cache) the trace file path for a run.
+
+        The first call creates a datetime-prefixed filename so traces sort
+        chronologically.  Subsequent calls for the same run_id return the
+        same path so the datetime doesn't shift mid-run.
+        """
+        if run_id in self._run_paths:
+            return self._run_paths[run_id]
         safe = "".join(ch for ch in str(run_id) if ch.isalnum() or ch in ("-", "_"))
         if not safe:
             safe = f"run_{int(time.time())}"
-        return self.trace_dir / f"{safe}.jsonl"
+        dt_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = self.trace_dir / f"{dt_prefix}_{safe}.jsonl"
+        self._run_paths[run_id] = path
+        return path
 
     def write_event(self, run_id: str, event: dict[str, Any]) -> None:
         p = self.path_for_run(run_id)

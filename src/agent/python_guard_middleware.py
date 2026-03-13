@@ -105,10 +105,11 @@ def _reject(tool_call_id: str | None, message: str) -> ToolMessage:
 _SIMPLE_LOOKUP_REJECTION = (
     "拒绝执行：这个问题属于「简单查询/信息获取」，不需要使用 Python。\n"
     "请改用相应工具：\n"
-    "- 股价：tool_get_daily_prices(ts_code, limit)\n"
-    "- 估值：tool_get_daily_basic(ts_code, limit)\n"
-    "- 公司信息：tool_get_stock_basic_detail / tool_get_stock_company\n"
-    "- 行业/清单：tool_get_universe 或 tool_search_stocks\n"
+    "- 股价+估值+公司信息：tool_stock_snapshot(query) — 一次获取全部\n"
+    "- 股价详情：tool_get_daily_prices(ts_code, limit)\n"
+    "- 估值详情：tool_get_daily_basic(ts_code, limit)\n"
+    "- 行业/清单：tool_get_universe 或 tool_smart_search\n"
+    "- 同行对比：tool_peer_comparison(ts_code)\n"
 )
 
 # Rejection message for print-only code

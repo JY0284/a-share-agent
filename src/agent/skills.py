@@ -8,7 +8,7 @@ Each experience.md contains:
 - Markdown body with guidance and examples
 
 The system supports:
-- Manual search/load via tool_search_skills / tool_load_skill (for user transparency)
+- Manual search+load via tool_search_and_load_skill (for user transparency)
 - Auto-injection: smart_select_skills() picks best skills based on code + query
 """
 

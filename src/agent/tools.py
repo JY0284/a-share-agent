@@ -1403,22 +1403,23 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> tupl
     
     ⚠️ THIS IS A LAST RESORT TOOL - only use when other tools cannot answer!
     
-    - "最近股价" → use tool_get_daily_prices, NOT Python
-    - "最近一个月股价" → use tool_get_daily_prices(start_date=...), NOT Python
-    - "PE是多少" → use tool_get_daily_basic, NOT Python
-    - "公司主营业务" → use tool_get_stock_company, NOT Python
+    - "茅台最近股价" → use tool_stock_snapshot("茅台"), NOT Python
+    - "最近一个月股价" → use tool_stock_snapshot then tool_get_daily_prices(start_date=...), NOT Python
+    - "PE是多少" → use tool_stock_snapshot (includes valuation), NOT Python
+    - "公司主营业务" → use tool_stock_snapshot (includes company info), NOT Python
+    - "同行对比" → use tool_peer_comparison(ts_code), NOT Python
     
     Only use Python when you need to COMPUTE (rolling, groupby, compare, rank, etc.)!
     
-    ## Skills - ALWAYS use tool_load_skill first!
-    Before writing Python code, use `tool_load_skill(skill_id)` to:
+    ## Skills - ALWAYS use tool_search_and_load_skill first!
+    Before writing Python code, use `tool_search_and_load_skill(query_or_skill_id)` to:
     1. Show users which skill patterns you're following (transparency)
     2. Get detailed code examples and best practices
     
     Available skills: rolling_indicators, backtest_ma_crossover, backtest_macd,
     statistical_analysis, time_series_forecast, risk_metrics, etc.
     
-    Use `tool_search_skills(query)` to find relevant skills.
+    Use `tool_search_and_load_skill(query)` to find and load relevant skills in one call.
     
     ## FORBIDDEN - Do NOT write code like this:
     ```python
@@ -1500,7 +1501,7 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> tupl
     plt.tight_layout()
     ```
     
-    Load `tool_load_skill("plotting_charts")` for more chart patterns.
+    Load `tool_search_and_load_skill("plotting_charts")` for more chart patterns.
     
     ## Stock Data Access via `store`
     ```python
@@ -1596,7 +1597,7 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> tupl
     
     Args:
         code: Python code that uses `store` to load and analyze data.
-        skills_used: List of skill IDs loaded via tool_load_skill before this call.
+        skills_used: List of skill IDs loaded via tool_search_and_load_skill before this call.
     
     Returns:
         Tuple of (content, artifact):
@@ -1620,7 +1621,7 @@ def tool_execute_python(code: str, skills_used: list[str] | None = None) -> tupl
             skill_list = ", ".join(f'"{s}"' for s in recommended)
             out["skill_hint"] = (
                 f"[Skill Recommendation] Your code matches patterns from: {skill_list}. "
-                f"Next time, call `tool_load_skill({recommended[0]!r})` BEFORE writing Python "
+                f"Next time, call `tool_search_and_load_skill({recommended[0]!r})` BEFORE writing Python "
                 f"to show users the skill patterns you're following and ensure best practices."
             )
     
@@ -1661,21 +1662,519 @@ def tool_clear_python_session() -> dict:
 
 
 # =============================================================================
+# COMPOSITE TOOLS - Reduce round-trips by combining common multi-step workflows
+# =============================================================================
+
+
+@tool
+def tool_stock_snapshot(query: str) -> dict:
+    """One-call snapshot: search stock → resolve → latest prices + valuation + company info.
+
+    Replaces the common 4-6 step preamble:
+      search_stocks → get_current_datetime → get_dataset_status → get_daily_prices
+      → get_daily_basic → get_stock_company
+
+    This tool does ALL of the above in a single call.
+
+    Args:
+        query: Stock name, code, or keyword (e.g. '茅台', '300888', '600519.SH')
+
+    Returns:
+        {
+          stock: {ts_code, name, industry, ...},
+          now: {date, date_compact, current_trade_date},
+          data_freshness: {conclusion, categories: [...]},
+          latest_prices: [{trade_date, open, high, low, close, vol, pct_chg}, ...],  # last 10
+          latest_valuation: [{trade_date, pe_ttm, pb, total_mv, circ_mv, turnover_rate}, ...],  # last 5
+          company: {chairman, employees, main_business, ...} | null,
+        }
+    """
+    result: dict = {}
+
+    # 1) Resolve ts_code: try direct resolve first, then search
+    stock_info = None
+    ts_code = None
+
+    # If query looks like a ts_code (e.g. 600519.SH), try resolve directly
+    if "." in query and len(query) <= 12:
+        try:
+            resolved = resolve_symbol(query, store_dir=STORE_DIR)
+            if resolved.get("ts_code"):
+                ts_code = resolved["ts_code"]
+                stock_info = resolved
+        except Exception:
+            pass
+
+    if ts_code is None:
+        search_result = search_stocks(query, offset=0, limit=5, store_dir=STORE_DIR)
+        rows = search_result.get("rows") or []
+        if rows:
+            top = rows[0]
+            ts_code = top.get("ts_code")
+            stock_info = top
+        else:
+            return {"error": f"未找到匹配 '{query}' 的股票", "stock": None}
+
+    result["stock"] = stock_info
+
+    # 2) Current datetime
+    tz = timezone(timedelta(hours=8))
+    now = datetime.now(tz)
+    result["now"] = {
+        "date": now.strftime("%Y-%m-%d"),
+        "date_compact": now.strftime("%Y%m%d"),
+        "time": now.strftime("%H:%M"),
+    }
+
+    # 3) Data freshness (lightweight: skip full dataset_status, just check market category)
+    try:
+        ds = tool_get_dataset_status.invoke({})
+        result["data_freshness"] = {
+            "conclusion": ds.get("conclusion", ""),
+            "categories": ds.get("categories", []),
+        }
+    except Exception:
+        result["data_freshness"] = {"conclusion": "无法获取", "categories": []}
+
+    # 4) Latest prices (last 10 trading days)
+    try:
+        prices = get_daily_prices(
+            ts_code, start_date=None, end_date=None, offset=0, limit=10, store_dir=STORE_DIR
+        )
+        result["latest_prices"] = prices.get("rows", [])
+    except Exception:
+        result["latest_prices"] = []
+
+    # 5) Latest valuation (last 5 rows)
+    try:
+        basic = get_daily_basic(
+            ts_code, start_date=None, end_date=None, offset=0, limit=5, store_dir=STORE_DIR
+        )
+        result["latest_valuation"] = basic.get("rows", [])
+    except Exception:
+        result["latest_valuation"] = []
+
+    # 6) Company profile
+    try:
+        company = get_stock_company(ts_code, store_dir=STORE_DIR)
+        result["company"] = company if company.get("found") else None
+    except Exception:
+        result["company"] = None
+
+    return result
+
+
+@tool
+def tool_smart_search(
+    query: str,
+    search_types: list[str] | None = None,
+    limit: int = 10,
+) -> dict:
+    """Search across stocks, indices, and ETFs/funds in one call.
+
+    Replaces the trial-and-error pattern of calling search_stocks → get_index_basic
+    → get_fund_basic sequentially until a match is found.
+
+    Args:
+        query: Name, code, or keyword (e.g. '沪深300', '黄金ETF', '茅台')
+        search_types: List of types to search. Default: all three.
+            Options: 'stock', 'index', 'fund'
+        limit: Max results per type (default 10)
+
+    Returns:
+        {
+          stock_results: {rows, total_count} | null,
+          index_results: {rows, total_count} | null,
+          fund_results: {rows, total_count} | null,
+          best_match: {type, ts_code, name} | null,
+        }
+    """
+    import re as _re
+
+    types = search_types or ["stock", "index", "fund"]
+    cap = min(limit or 10, 50)
+    result: dict = {}
+
+    best_match = None
+
+    # --- detect code-like queries so we also do ts_code exact lookups ---
+    # Matches bare 6-digit codes (e.g. '513800') or codes with exchange
+    # suffix already present (e.g. '513800.SH', '161128.sz').
+    _bare_code_re = _re.compile(r'^(\d{6})$')
+    _full_code_re = _re.compile(r'^(\d{6})\.(SH|SZ|BJ)$', _re.I)
+
+    _bare_m = _bare_code_re.match(query.strip())
+    _full_m = _full_code_re.match(query.strip())
+
+    if _bare_m:
+        # Try both exchanges for fund and index ts_code lookups
+        _code_candidates = [f"{_bare_m.group(1)}.SH", f"{_bare_m.group(1)}.SZ"]
+    elif _full_m:
+        _code_candidates = [query.strip().upper()]
+    else:
+        _code_candidates = []
+
+    def _merge_rows(existing: dict | None, extra_rows: list) -> dict:
+        """Merge extra_rows into an existing result dict, deduplicating by ts_code."""
+        if not extra_rows:
+            return existing or {"rows": [], "total_count": 0, "showing": "0-0", "has_more": False}
+        if not existing or not existing.get("rows"):
+            merged_rows = extra_rows
+        else:
+            seen = {r.get("ts_code") for r in existing["rows"]}
+            merged_rows = extra_rows + [r for r in existing["rows"] if r.get("ts_code") not in seen]
+        total = len(merged_rows)
+        return {
+            "rows": merged_rows,
+            "total_count": total,
+            "showing": f"1-{total}",
+            "has_more": False,
+        }
+
+    if "stock" in types:
+        try:
+            sr = search_stocks(query, offset=0, limit=cap, store_dir=STORE_DIR)
+            result["stock_results"] = sr
+            rows = sr.get("rows") or []
+            if rows and best_match is None:
+                best_match = {"type": "stock", "ts_code": rows[0].get("ts_code"), "name": rows[0].get("name")}
+        except Exception:
+            result["stock_results"] = None
+
+    if "index" in types:
+        try:
+            ir = get_index_basic(
+                name_contains=query, offset=0, limit=cap, store_dir=STORE_DIR
+            )
+            # Supplement with ts_code-based lookup for code queries
+            code_rows: list = []
+            for _candidate in _code_candidates:
+                try:
+                    _cr = get_index_basic(ts_code=_candidate, store_dir=STORE_DIR)
+                    code_rows.extend(_cr.get("rows") or [])
+                except Exception:
+                    pass
+            ir = _merge_rows(ir, code_rows)
+            result["index_results"] = ir
+            rows = ir.get("rows") or []
+            if rows and best_match is None:
+                best_match = {"type": "index", "ts_code": rows[0].get("ts_code"), "name": rows[0].get("name")}
+        except Exception:
+            result["index_results"] = None
+
+    if "fund" in types:
+        try:
+            fr = get_fund_basic(
+                name_contains=query, offset=0, limit=cap, store_dir=STORE_DIR
+            )
+            # Supplement with ts_code-based lookup for code queries
+            code_rows = []
+            for _candidate in _code_candidates:
+                try:
+                    _cr = get_fund_basic(ts_code=_candidate, store_dir=STORE_DIR)
+                    code_rows.extend(_cr.get("rows") or [])
+                except Exception:
+                    pass
+            fr = _merge_rows(fr, code_rows)
+            result["fund_results"] = fr
+            rows = fr.get("rows") or []
+            if rows and best_match is None:
+                best_match = {"type": "fund", "ts_code": rows[0].get("ts_code"), "name": rows[0].get("name")}
+        except Exception:
+            result["fund_results"] = None
+
+    result["best_match"] = best_match
+    return result
+
+
+@tool
+def tool_peer_comparison(
+    ts_code: str,
+    metrics: list[str] | None = None,
+    limit: int = 10,
+) -> dict:
+    """Compare a stock with its industry peers on key valuation/size metrics.
+
+    Auto-detects the stock's industry, fetches peer stocks, and returns a
+    comparison table — all in one call.
+
+    Args:
+        ts_code: Stock ts_code (e.g. '600519.SH')
+        metrics: Valuation columns to include. Default: ['pe_ttm', 'pb', 'total_mv']
+            Options: pe_ttm, pb, ps_ttm, total_mv, circ_mv, turnover_rate
+        limit: Max number of peers to return (default 10)
+
+    Returns:
+        {
+          target: {ts_code, name, industry, ...metrics},
+          peers: [{ts_code, name, industry, ...metrics}, ...],
+          industry: str,
+          peer_count: int,
+        }
+    """
+    metrics = metrics or ["pe_ttm", "pb", "total_mv"]
+    cap = min(limit or 10, 30)
+
+    # 1) Get target stock basic info to find industry
+    target_info = get_stock_basic_detail(ts_code, store_dir=STORE_DIR)
+    if not target_info.get("found"):
+        return {"error": f"未找到股票 {ts_code}", "target": None, "peers": []}
+
+    target_data = target_info.get("data", {})
+    industry = target_data.get("industry", "")
+    if not industry:
+        return {"error": f"无法获取 {ts_code} 行业信息", "target": target_data, "peers": []}
+
+    # 2) Get universe of peers in the same industry
+    universe = get_universe(industry=industry, offset=0, limit=cap + 5, store_dir=STORE_DIR)
+    peer_codes = [r.get("ts_code") for r in (universe.get("rows") or []) if r.get("ts_code")]
+
+    # Ensure target is in the list
+    if ts_code not in peer_codes:
+        peer_codes.insert(0, ts_code)
+
+    # 3) Fetch latest valuation for each peer
+    def _get_valuation(code: str) -> dict | None:
+        try:
+            basic = get_daily_basic(code, start_date=None, end_date=None, offset=0, limit=1, store_dir=STORE_DIR)
+            rows = basic.get("rows") or []
+            if rows:
+                row = rows[0]
+                entry = {"ts_code": code}
+                # Find name from universe rows
+                for u in (universe.get("rows") or []):
+                    if u.get("ts_code") == code:
+                        entry["name"] = u.get("name", "")
+                        break
+                for m in metrics:
+                    entry[m] = row.get(m)
+                return entry
+        except Exception:
+            pass
+        return None
+
+    target_val = None
+    peers = []
+    for code in peer_codes[:cap + 1]:
+        val = _get_valuation(code)
+        if val is None:
+            continue
+        if code == ts_code:
+            val["name"] = val.get("name") or target_data.get("name", "")
+            target_val = val
+        else:
+            peers.append(val)
+        if len(peers) >= cap:
+            break
+
+    return {
+        "target": target_val,
+        "peers": peers,
+        "industry": industry,
+        "peer_count": len(peers),
+    }
+
+
+@tool
+def tool_search_and_load_skill(query_or_skill_id: str) -> dict:
+    """Search for a skill and load its full content in one call.
+
+    Replaces the two-step pattern: tool_search_skills → tool_load_skill.
+
+    If `query_or_skill_id` exactly matches a skill directory name, loads it directly.
+    Otherwise, searches by keyword and loads the top result.
+
+    Args:
+        query_or_skill_id: Exact skill ID (e.g. 'rolling_indicators') or search query
+            (e.g. '均线计算', 'backtest', 'MACD')
+
+    Returns:
+        {
+          found: bool,
+          skill_id: str,
+          name: str,
+          content: str,    # Full skill markdown body
+          meta: {...},     # Frontmatter metadata
+          alternatives: [{skill_id, name, description}, ...],  # Other matches
+        }
+    """
+    # Try direct load first
+    loaded = load_skill(query_or_skill_id)
+    if loaded.get("found"):
+        # Also provide alternatives
+        alts = []
+        try:
+            hits = search_skills(query_or_skill_id, k=3)
+            for s in hits:
+                sid = s.path.parent.name
+                if sid != query_or_skill_id:
+                    alts.append({"skill_id": sid, "name": s.name, "description": s.description})
+        except Exception:
+            pass
+        return {
+            "found": True,
+            "skill_id": query_or_skill_id,
+            "name": loaded.get("name", query_or_skill_id),
+            "content": loaded.get("content", ""),
+            "meta": loaded.get("meta", {}),
+            "alternatives": alts,
+        }
+
+    # Search by keyword
+    hits = search_skills(query_or_skill_id, k=5)
+    if not hits:
+        return {
+            "found": False,
+            "skill_id": None,
+            "name": None,
+            "content": None,
+            "meta": {},
+            "alternatives": [],
+            "message": f"未找到与 '{query_or_skill_id}' 相关的 skill",
+        }
+
+    # Load the top result
+    top = hits[0]
+    top_id = top.path.parent.name
+    loaded = load_skill(top_id)
+
+    alts = []
+    for s in hits[1:]:
+        sid = s.path.parent.name
+        alts.append({"skill_id": sid, "name": s.name, "description": s.description})
+
+    return {
+        "found": loaded.get("found", False),
+        "skill_id": top_id,
+        "name": loaded.get("name", top.name),
+        "content": loaded.get("content", ""),
+        "meta": loaded.get("meta", {}),
+        "alternatives": alts,
+    }
+
+
+@tool(response_format="content_and_artifact")
+def tool_backtest_strategy(
+    ts_codes: list[str],
+    strategy: str,
+    params: dict | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    fee_rate: float | None = None,
+    compare_stocks: bool = False,
+) -> tuple[dict, dict]:
+    """Run a strategy backtest on one or more stocks — NO Python code needed!
+
+    This replaces writing 50+ lines of backtest Python. Returns metrics, a
+    comparison table, and an equity-curve chart automatically.
+
+    ## Supported Strategies
+
+    | strategy      | Description                          | Key params (defaults)                           |
+    |---------------|--------------------------------------|-------------------------------------------------|
+    | `dual_ma`     | Dual moving-average crossover        | fast=5, slow=20, ma_type="sma" (or "ema")      |
+    | `bollinger`   | Bollinger-band mean-reversion        | period=20, num_std=2.0                          |
+    | `macd`        | MACD histogram crossover             | fast=12, slow=26, signal=9                      |
+    | `chandelier`  | Chandelier ATR trailing-stop exit    | atr_period=22, mult=3.0                         |
+    | `buy_and_hold`| Simple buy-and-hold                  | (none)                                          |
+    | `momentum`    | Momentum rotation (multi-asset)      | n_days=20, top_k=1, rebal_freq=20              |
+
+    ## Usage Examples
+
+    **Single stock, default params:**
+    ```
+    tool_backtest_strategy(ts_codes=["600519.SH"], strategy="dual_ma")
+    ```
+
+    **Custom params:**
+    ```
+    tool_backtest_strategy(ts_codes=["600519.SH"], strategy="dual_ma",
+                           params={"fast": 10, "slow": 60, "ma_type": "ema"})
+    ```
+
+    **Compare same strategy across multiple stocks:**
+    ```
+    tool_backtest_strategy(ts_codes=["600519.SH", "000858.SZ", "000568.SZ"],
+                           strategy="macd", compare_stocks=True)
+    ```
+
+    **Momentum rotation (multi-asset portfolio):**
+    ```
+    tool_backtest_strategy(ts_codes=["600519.SH", "601318.SH", "000858.SZ"],
+                           strategy="momentum",
+                           params={"n_days": 60, "top_k": 1, "rebal_freq": 20})
+    ```
+
+    Args:
+        ts_codes: One or more stock/ETF ts_codes (e.g. ["600519.SH"])
+        strategy: Strategy name (see table above)
+        params: Override default strategy parameters
+        start_date: Backtest start date YYYYMMDD (default: all available data)
+        end_date: Backtest end date YYYYMMDD (default: latest data)
+        fee_rate: Transaction fee per side (default: 0.03% single-asset, 0.1% momentum)
+        compare_stocks: If True and multiple ts_codes, compare them side by side
+
+    Returns:
+        Tuple of (content, artifact):
+        - content: {strategy, params, results: [{ts_code, name, metrics}], comparison_table, errors}
+        - artifact: {figures: [{image, title, format}]} for frontend chart display
+    """
+    from agent.backtest import run_backtest
+    from agent.figures import save_figure, format_figure_reference
+    from agent.sandbox import get_thread_id
+
+    result = run_backtest(
+        ts_codes=ts_codes,
+        strategy=strategy,
+        params=params,
+        start_date=start_date,
+        end_date=end_date,
+        fee_rate=fee_rate,
+        generate_chart=True,
+    )
+
+    # Separate figures from content (same pattern as tool_execute_python)
+    raw_figures = result.pop("figures", None) or []
+    artifact_figures = []
+    figure_refs = []
+
+    tid = get_thread_id() or "default"
+    for fig in raw_figures:
+        img_b64 = fig.get("image", "")
+        title = fig.get("title", "Backtest")
+        fig_meta = save_figure(image_base64=img_b64, title=title, format="png", thread_id=tid)
+        fig_id = fig_meta["id"]
+        ref = format_figure_reference(fig_id, title)
+        artifact_figures.append({
+            "id": fig_id,
+            "title": title,
+            "format": "png",
+            "image": img_b64,
+            "reference": ref,
+        })
+        figure_refs.append({"id": fig_id, "title": title, "reference": ref})
+
+    # Content for LLM (no base64 images)
+    result["generated_figures"] = figure_refs
+    artifact = {"figures": artifact_figures} if artifact_figures else {}
+
+    return result, artifact
+
+
+# =============================================================================
 # EXPORT
 # =============================================================================
 
 ALL_TOOLS = [
-    # Discovery (use these first!)
-    tool_search_stocks,
-    tool_get_dataset_status,
-    tool_get_current_datetime,
+    # Composite (high-level, reduces round-trips)
+    tool_stock_snapshot,
+    tool_smart_search,
+    tool_peer_comparison,
+    tool_search_and_load_skill,
+    tool_backtest_strategy,
+    # Discovery (when composite tools don't cover the case)
     tool_list_industries,
-    tool_resolve_symbol,
-    tool_get_stock_basic_detail,
-    tool_get_stock_company,
     tool_get_universe,
-    tool_get_index_basic,
-    tool_get_fund_basic,
     # Simple Data (for basic lookups, no calculation)
     tool_get_daily_prices,
     tool_get_daily_adj_prices,
@@ -1715,10 +2214,8 @@ ALL_TOOLS = [
     tool_is_trading_day,
     tool_get_prev_trade_date,
     tool_get_next_trade_date,
-    # Skills (for Python execution)
+    # Skills (single-call)
     tool_list_skills,
-    tool_search_skills,
-    tool_load_skill,
     # Python Execution (for complex analysis only)
     tool_execute_python,
     tool_clear_python_session,

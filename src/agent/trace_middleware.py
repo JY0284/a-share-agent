@@ -350,9 +350,15 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
 
         resp = handler(request)
 
+        # --- Log AI messages FIRST (must not be blocked by cost errors) ---
         try:
-            # Get actual model name from the LLM config, falling back to None
-            # so estimate_cost uses usage["model"] from response metadata
+            for m in resp.result:
+                self._writer.write_event(run_id, _message_event(m, direction="out"))
+        except Exception:
+            pass
+
+        # --- Then try usage/cost (best-effort, failures won't lose messages) ---
+        try:
             model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
             agg = _attach_usage_cost(resp.result, model_name=model_name)
 
@@ -363,14 +369,13 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             }
             if agg:
                 model_end.update(agg)
-
-            # Log each outbound message from the model (usually AIMessage)
-            for m in resp.result:
-                self._writer.write_event(run_id, _message_event(m, direction="out"))
-
             self._writer.write_event(run_id, model_end)
         except Exception:
-            pass
+            # Still write a minimal model_end so the trace has a closing event
+            try:
+                self._writer.write_event(run_id, {"event": "model_end", "error": "cost_computation_failed"})
+            except Exception:
+                pass
 
         return resp
 
@@ -408,9 +413,15 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
 
         resp = await handler(request)
 
+        # --- Log AI messages FIRST (must not be blocked by cost errors) ---
         try:
-            # Get actual model name from the LLM config, falling back to None
-            # so estimate_cost uses usage["model"] from response metadata
+            for m in resp.result:
+                self._writer.write_event(run_id, _message_event(m, direction="out"))
+        except Exception:
+            pass
+
+        # --- Then try usage/cost (best-effort, failures won't lose messages) ---
+        try:
             model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
             agg = _attach_usage_cost(resp.result, model_name=model_name)
 
@@ -421,12 +432,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             }
             if agg:
                 model_end.update(agg)
-
-            for m in resp.result:
-                self._writer.write_event(run_id, _message_event(m, direction="out"))
             self._writer.write_event(run_id, model_end)
         except Exception:
-            pass
+            try:
+                self._writer.write_event(run_id, {"event": "model_end", "error": "cost_computation_failed"})
+            except Exception:
+                pass
 
         return resp
 

@@ -35,8 +35,8 @@ graph = create_agent(
     tools=get_all_tools(),
     system_prompt=get_system_prompt(),
     middleware=[
-        LocalTraceMiddleware(),
-        SkillInjectionMiddleware(),  # Inject relevant skill content based on query
+        SkillInjectionMiddleware(),  # Inject relevant skill content based on query (runs first, modifies messages)
+        LocalTraceMiddleware(),      # Traces the MODIFIED messages (sees injection content)
         PythonGuardMiddleware(),
         TodoListMiddleware(),
     ],

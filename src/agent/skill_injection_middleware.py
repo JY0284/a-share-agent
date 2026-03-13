@@ -55,6 +55,15 @@ class SkillInjectionMiddleware(AgentMiddleware[Any, Any]):
     
     tools = []  # Required by middleware interface but not used
     
+    # Backtest skills superseded by tool_backtest_strategy
+    _BACKTEST_SKILL_IDS = frozenset({
+        "backtest_ma_crossover",
+        "backtest_macd",
+        "backtest_bollinger",
+        "backtest_chandelier_exit",
+        "backtest_momentum_rotation",
+    })
+    
     def __init__(self, max_chars: int = MAX_SKILL_INJECT_CHARS, min_score: int = MIN_SKILL_SCORE):
         self.max_chars = max_chars
         self.min_score = min_score
@@ -63,6 +72,11 @@ class SkillInjectionMiddleware(AgentMiddleware[Any, Any]):
         """Build the skill content suffix to append to user message."""
         skill_id = skill_info.get("skill_id", "unknown")
         skill_name = skill_info.get("skill_name", skill_id)
+        
+        # Redirect backtest skills to tool_backtest_strategy
+        if skill_id in self._BACKTEST_SKILL_IDS:
+            return self._build_backtest_redirect(skill_id)
+        
         skill_content = skill_info.get("content", "")
         
         return f"""
@@ -75,9 +89,34 @@ Follow these code patterns when writing Python:
 
 {skill_content}
 
-IMPORTANT: Before writing Python code, call `tool_load_skill("{skill_id}")` to:
+IMPORTANT: Before writing Python code, call `tool_search_and_load_skill("{skill_id}")` to:
 1. Show users the skill you're using (builds trust)
 2. Confirm you have the full guidance
+---"""
+    
+    @staticmethod
+    def _build_backtest_redirect(skill_id: str) -> str:
+        """Instead of injecting a backtest skill, redirect to tool_backtest_strategy."""
+        strategy_map = {
+            "backtest_ma_crossover": "dual_ma",
+            "backtest_macd": "macd",
+            "backtest_bollinger": "bollinger",
+            "backtest_chandelier_exit": "chandelier",
+            "backtest_momentum_rotation": "momentum",
+        }
+        strategy = strategy_map.get(skill_id, "dual_ma")
+        return f"""
+
+---
+[Auto-Redirect: Use tool_backtest_strategy instead of Python]
+
+⚠️ Do NOT load skill "{skill_id}" or write Python backtest code.
+Use `tool_backtest_strategy` — it handles the entire backtest pipeline in one call:
+
+  tool_backtest_strategy(ts_codes=["<ts_code>"], strategy="{strategy}")
+
+Supported strategies: dual_ma, bollinger, macd, chandelier, buy_and_hold, momentum.
+The tool returns metrics (CAGR, Sharpe, MaxDD, etc.) + equity-curve chart automatically.
 ---"""
     
     def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], Any]) -> Any:
