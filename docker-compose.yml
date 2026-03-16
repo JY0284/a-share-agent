@@ -1,0 +1,75 @@
+# Docker Compose for persistent LangGraph deployment with PostgreSQL.
+#
+# Usage:
+#   cd a-share-agent
+#   langgraph up --port 2024
+#
+# Or manually with docker compose:
+#   docker compose up -d
+#
+# This provides PostgreSQL-backed persistence so threads and checkpoints
+# survive restarts indefinitely.
+#
+# Prerequisites:
+#   - Docker Desktop installed and running
+#   - LANGSMITH_API_KEY or LANGGRAPH_CLOUD_LICENSE_KEY set in .env
+#
+# Note: For local development without Docker, use:
+#   uv run langgraph dev --port 2024
+# This uses pickle-based persistence that also survives restarts.
+
+volumes:
+  langgraph-data:
+    driver: local
+
+services:
+  langgraph-postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=vector
+    volumes:
+      - langgraph-data:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U postgres
+      interval: 5s
+      timeout: 1s
+      retries: 5
+      start_period: 10s
+
+  langgraph-redis:
+    image: redis:6
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      timeout: 1s
+      retries: 5
+
+  langgraph-api:
+    ports:
+      - "2024:8000"
+    depends_on:
+      langgraph-postgres:
+        condition: service_healthy
+      langgraph-redis:
+        condition: service_healthy
+    environment:
+      REDIS_URI: redis://langgraph-redis:6379
+      POSTGRES_URI: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
+    env_file:
+      - .env
+    # The image is built by `langgraph up` from the project code.
+    # If running manually, first build with: langgraph build -t a-share-agent
+    # Then set: image: a-share-agent
+    healthcheck:
+      test: python /api/healthcheck.py
+      interval: 60s
+      start_interval: 1s
+      start_period: 10s

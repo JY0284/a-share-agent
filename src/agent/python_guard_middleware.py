@@ -37,6 +37,10 @@ def _is_simple_lookup_query(q: str) -> bool:
     if not s:
         return False
 
+    # Long messages usually provide data/context for analysis, not simple lookups
+    if len(s) > 500:
+        return False
+
     # Calculation / deep analysis hints: allow python
     calc_terms = [
         "计算",
@@ -61,6 +65,17 @@ def _is_simple_lookup_query(q: str) -> bool:
         "跌幅",
         "年化",
         "最大回撤",
+        # Portfolio analysis
+        "分析",
+        "持仓",
+        "盈亏",
+        "贡献",
+        "权重",
+        "结构",
+        "配置",
+        "优化",
+        "组合",
+        "仓位",
     ]
     if any(t in s for t in calc_terms):
         return False

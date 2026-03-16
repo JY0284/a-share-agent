@@ -31,7 +31,28 @@ A professional A-share (Chinese stock market) financial analysis agent powered b
 │   (Port 3000)   │     │    (Port 2024)    │     │   (Parquet +    │
 │                 │◀────│                   │◀────│    DuckDB)      │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
+        │                        │
+   SQLite (billing.db)     Persistence Layer
+   ├─ users & sessions     ├─ Dev: pickle files (.langgraph_api/)
+   ├─ billing accounts     └─ Prod: PostgreSQL (Docker)
+   └─ thread ownership
 ```
+
+### Thread Persistence & Per-User Isolation
+
+Each user's threads are isolated at the proxy level:
+
+1. **Thread creation**: The proxy injects `user_id` + `graph_id` into thread metadata
+2. **Thread search**: The proxy adds `user_id` as a metadata filter — users only see their own threads
+3. **Thread access**: The proxy verifies thread ownership (SQLite table) before allowing access to specific threads
+4. **Metadata protection**: PATCH requests have `user_id` forcibly re-injected to prevent tampering
+
+Two persistence modes are supported:
+
+| Mode | Storage | Thread Survival | Setup |
+|------|---------|-----------------|-------|
+| **Dev** (default) | Pickle files in `.langgraph_api/` | Survives restarts (fragile) | `uv run langgraph dev` |
+| **Production** | PostgreSQL via Docker | Fully persistent | `langgraph up` or `docker compose up` |
 
 ## Setup
 
@@ -54,6 +75,8 @@ STOCK_DATA_STORE_DIR=../stock_data/store
 
 ### 3. Start the Agent Backend (LangGraph server)
 
+#### Option A: Development Mode (default)
+
 ```bash
 cd a-share-agent
 # Recommended (works on Windows/macOS/Linux):
@@ -61,12 +84,33 @@ uv run langgraph dev --port 2024
 ```
 
 This starts the LangGraph server at `http://127.0.0.1:2024`.
+Threads and checkpoints are persisted to `.langgraph_api/` using pickle files.
 
 If the server prints the banner but the browser shows "not responding", try disabling hot reload:
 
 ```bash
 uv run langgraph dev --port 2024 --no-reload
 ```
+
+#### Option B: Production Mode (Docker + PostgreSQL)
+
+For production deployment with full PostgreSQL persistence:
+
+```bash
+cd a-share-agent
+
+# Prerequisites: Docker Desktop must be running
+# Add LANGSMITH_API_KEY or LANGGRAPH_CLOUD_LICENSE_KEY to .env
+
+# Using langgraph CLI:
+uv run langgraph up --port 2024
+
+# Or using the PowerShell script:
+.\scripts\start-server.ps1 -Prod
+```
+
+This starts PostgreSQL, Redis, and the LangGraph API server in Docker containers.
+All threads and checkpoints are stored in PostgreSQL and survive restarts.
 
 ### 4. Start the Chat UI (agent-chat-ui frontend)
 

@@ -14,6 +14,8 @@ from agent.skill_injection_middleware import SkillInjectionMiddleware
 from agent.trace_middleware import LocalTraceMiddleware
 from agent.tools import ALL_TOOLS
 from agent.web_search import WEB_SEARCH_TOOLS, get_tavily_api_key
+from agent.memory import MEMORY_TOOLS, MEM0_ENABLED
+from agent.memory_middleware import MemoryMiddleware
 
 # Initialize the DeepSeek model
 model = ChatDeepSeek(
@@ -27,17 +29,29 @@ def get_all_tools():
     tools = list(ALL_TOOLS)
     if get_tavily_api_key():
         tools.extend(WEB_SEARCH_TOOLS)
+    # Add memory tools if mem0 is enabled
+    if MEM0_ENABLED:
+        tools.extend(MEMORY_TOOLS)
     return tools
+
+# Build middleware stack
+def get_middleware():
+    middleware = []
+    # Memory middleware first: injects relevant memories into context
+    if MEM0_ENABLED:
+        middleware.append(MemoryMiddleware())
+    middleware.extend([
+        SkillInjectionMiddleware(),  # Inject relevant skill content based on query
+        LocalTraceMiddleware(),      # Traces the MODIFIED messages
+        PythonGuardMiddleware(),
+        TodoListMiddleware(),
+    ])
+    return middleware
 
 # Create the agent graph using LangGraph 1.0 API
 graph = create_agent(
     model=model,
     tools=get_all_tools(),
     system_prompt=get_system_prompt(),
-    middleware=[
-        SkillInjectionMiddleware(),  # Inject relevant skill content based on query (runs first, modifies messages)
-        LocalTraceMiddleware(),      # Traces the MODIFIED messages (sees injection content)
-        PythonGuardMiddleware(),
-        TodoListMiddleware(),
-    ],
+    middleware=get_middleware(),
 )

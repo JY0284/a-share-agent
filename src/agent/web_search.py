@@ -82,7 +82,7 @@ def get_web_search_tools() -> list:
 
 
 @tool
-def tool_web_search(query: str, max_results: int = 3, *, config: Optional[RunnableConfig] = None) -> dict:
+def tool_web_search(query: str, max_results: int = 3, *, config: RunnableConfig) -> dict:
     """Search the web for real-time information using Tavily.
 
     Use this tool when you need to:

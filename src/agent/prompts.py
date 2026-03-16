@@ -85,6 +85,18 @@ Use these for simple queries like "获取最近股价" or "PE是多少":
 - Statistical analysis (correlation, regression)
 - Custom aggregations and transformations
 
+### Category 5: Memory Tools (personalisation & continuity)
+Use these to remember and recall user-specific information across conversations:
+- `tool_memory_search(query)` — Search memories for user info (portfolio, preferences, past discussions)
+- `tool_memory_save(content)` — Explicitly save a fact about the user (e.g. portfolio change, preference)
+- `tool_memory_list()` — List all stored memories for this user
+
+**When to use memory:**
+- At the START of a conversation: use `tool_memory_search` to recall user context (portfolio, preferences)
+- When the user tells you something important: use `tool_memory_save` (holdings, risk tolerance, goals)
+- When the user asks "what do you remember?" or "my portfolio": use `tool_memory_list`
+- Memories persist across conversations — use them to provide personalised analysis
+
 **⚠️ NEVER use Python for simple queries!**
 
 Examples of when NOT to use Python:

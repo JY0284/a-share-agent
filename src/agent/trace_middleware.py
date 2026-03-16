@@ -365,15 +365,15 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             model_end: dict[str, Any] = {
                 "event": "model_end",
                 "result_count": len(resp.result) if resp.result else 0,
-                "structured_response": resp.structured_response,
             }
             if agg:
                 model_end.update(agg)
             self._writer.write_event(run_id, model_end)
-        except Exception:
+        except Exception as exc:
             # Still write a minimal model_end so the trace has a closing event
+            print(f"[trace] cost computation failed: {type(exc).__name__}: {exc}")
             try:
-                self._writer.write_event(run_id, {"event": "model_end", "error": "cost_computation_failed"})
+                self._writer.write_event(run_id, {"event": "model_end", "error": f"cost_computation_failed: {exc}"})
             except Exception:
                 pass
 
@@ -395,11 +395,11 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         
         try:
             if request.messages:
-                self._writer.write_event(
+                await self._writer.awrite_event(
                     run_id,
                     _message_event(request.messages[-1], direction="in"),
                 )
-            self._writer.write_event(
+            await self._writer.awrite_event(
                 run_id,
                 {
                     "event": "model_start",
@@ -416,7 +416,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         # --- Log AI messages FIRST (must not be blocked by cost errors) ---
         try:
             for m in resp.result:
-                self._writer.write_event(run_id, _message_event(m, direction="out"))
+                await self._writer.awrite_event(run_id, _message_event(m, direction="out"))
         except Exception:
             pass
 
@@ -428,14 +428,14 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             model_end: dict[str, Any] = {
                 "event": "model_end",
                 "result_count": len(resp.result) if resp.result else 0,
-                "structured_response": resp.structured_response,
             }
             if agg:
                 model_end.update(agg)
-            self._writer.write_event(run_id, model_end)
-        except Exception:
+            await self._writer.awrite_event(run_id, model_end)
+        except Exception as exc:
+            print(f"[trace] cost computation failed: {type(exc).__name__}: {exc}")
             try:
-                self._writer.write_event(run_id, {"event": "model_end", "error": "cost_computation_failed"})
+                await self._writer.awrite_event(run_id, {"event": "model_end", "error": f"cost_computation_failed: {exc}"})
             except Exception:
                 pass
 
@@ -526,7 +526,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         tool_call_id = tool_call.get("id") or getattr(runtime, "tool_call_id", None)
 
         try:
-            self._writer.write_event(
+            await self._writer.awrite_event(
                 run_id,
                 {
                     "event": "tool_start",
@@ -546,7 +546,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             if len(content_str) > self._max_payload_chars:
                 content_str = content_str[: self._max_payload_chars] + "..."
 
-            self._writer.write_event(
+            await self._writer.awrite_event(
                 run_id,
                 {
                     "event": "tool_end",
@@ -560,7 +560,7 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
                 msg_ev = _message_event(result, direction="out")
                 if isinstance(msg_ev.get("content"), str) and len(msg_ev["content"]) > self._max_payload_chars:
                     msg_ev["content"] = msg_ev["content"][: self._max_payload_chars] + "..."
-                self._writer.write_event(run_id, msg_ev)
+                await self._writer.awrite_event(run_id, msg_ev)
         except Exception:
             pass
 

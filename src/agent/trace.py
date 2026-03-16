@@ -6,11 +6,18 @@ Goal:
 
 Implementation:
 - A middleware logs model calls + tool calls as JSONL (one event per line)
-- Files are saved under: a-share-agent/traces/<run_id>.jsonl
+- Files are saved under: a-share-agent-traces/<datetime>_<run_id>.jsonl
+
+Note:
+  ``langgraph dev`` enables BlockBuster which **blocks** synchronous I/O
+  inside async functions.  All writes from async middleware must therefore
+  go through ``awrite_event`` (which delegates to a thread-pool) rather
+  than the synchronous ``write_event``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -56,6 +63,8 @@ class TraceWriter:
         self._run_paths[run_id] = path
         return path
 
+    # -- synchronous (for direct / sync invocation) --
+
     def write_event(self, run_id: str, event: dict[str, Any]) -> None:
         p = self.path_for_run(run_id)
         payload = {
@@ -64,6 +73,20 @@ class TraceWriter:
         }
         with p.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False, default=_json_default) + "\n")
+
+    # -- async-safe (for awrap_model_call / awrap_tool_call) --
+
+    def _write_event_sync(self, run_id: str, event: dict[str, Any]) -> None:
+        """Internal sync helper used by ``awrite_event``."""
+        self.write_event(run_id, event)
+
+    async def awrite_event(self, run_id: str, event: dict[str, Any]) -> None:
+        """Async version of ``write_event``.
+
+        Delegates the blocking file I/O to a thread-pool so that
+        BlockBuster (used by ``langgraph dev``) does not raise.
+        """
+        await asyncio.to_thread(self._write_event_sync, run_id, event)
 
 
 def get_trace_writer() -> TraceWriter:

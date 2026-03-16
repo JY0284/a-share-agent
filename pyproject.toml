@@ -18,6 +18,7 @@ dependencies = [
     "langchain-tavily>=0.1.0",
     "statsmodels>=0.14.0",
     "arch>=7.0.0",
+    "mem0ai>=0.1.0",
 ]
 
 [build-system]
