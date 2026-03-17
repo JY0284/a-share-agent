@@ -92,6 +92,14 @@ If the server prints the banner but the browser shows "not responding", try disa
 uv run langgraph dev --port 2024 --no-reload
 ```
 
+> **⚠️ Windows Users:** The dev server may crash with `BlockingError: Blocking call to os.unlink` due to synchronous I/O in the checkpoint pickle storage. Add `--allow-blocking` to work around this:
+>
+> ```powershell
+> uv run langgraph dev --port 2024 --no-browser --allow-blocking
+> ```
+>
+> This allows synchronous blocking I/O on the shared event loop. For production, use Docker (Option B) or set `BG_JOB_ISOLATED_LOOPS=true`.
+
 #### Option B: Production Mode (Docker + PostgreSQL)
 
 For production deployment with full PostgreSQL persistence:
