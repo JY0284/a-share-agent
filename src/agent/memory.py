@@ -15,9 +15,12 @@ Architecture:
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
+
+_logger = logging.getLogger(__name__)
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -80,10 +83,13 @@ def _get_mem0_config() -> dict:
             },
         }
     else:
+        # bge-small-zh-v1.5 is optimised for Chinese text —
+        # the previous all-MiniLM-L6-v2 was English-focused and
+        # caused near-zero recall on Chinese memory queries.
         embedder_config = {
             "provider": "huggingface",
             "config": {
-                "model": "sentence-transformers/all-MiniLM-L6-v2",
+                "model": "BAAI/bge-small-zh-v1.5",
             },
         }
 
@@ -142,11 +148,21 @@ def get_memory():
 
 
 def get_user_id(config: Optional[RunnableConfig] = None) -> Optional[str]:
-    """Extract user_id from LangGraph config.configurable.user_id."""
+    """Extract user_id from LangGraph config.configurable.user_id.
+
+    Falls back to 'dev_user' when running locally without auth,
+    so memory features still work during development.
+    """
+    _fallback = os.environ.get("DEFAULT_USER_ID", "dev_user")
     if config is None:
-        return None
+        _logger.warning("get_user_id called without config — falling back to '%s'", _fallback)
+        return _fallback
     configurable = config.get("configurable", {})
-    return configurable.get("user_id")
+    uid = configurable.get("user_id")
+    if uid:
+        return str(uid)
+    _logger.warning("No user_id in config.configurable — falling back to '%s'", _fallback)
+    return _fallback
 
 
 # ---------------------------------------------------------------------------

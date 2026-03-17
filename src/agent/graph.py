@@ -16,6 +16,8 @@ from agent.tools import ALL_TOOLS
 from agent.web_search import WEB_SEARCH_TOOLS, get_tavily_api_key
 from agent.memory import MEMORY_TOOLS, MEM0_ENABLED
 from agent.memory_middleware import MemoryMiddleware
+from agent.profile_tools import PROFILE_TOOLS
+from agent.batch_tools import BATCH_TOOLS
 
 # Initialize the DeepSeek model
 model = ChatDeepSeek(
@@ -32,14 +34,16 @@ def get_all_tools():
     # Add memory tools if mem0 is enabled
     if MEM0_ENABLED:
         tools.extend(MEMORY_TOOLS)
+    # Always include profile + batch tools (no external dependency)
+    tools.extend(PROFILE_TOOLS)
+    tools.extend(BATCH_TOOLS)
     return tools
 
 # Build middleware stack
 def get_middleware():
     middleware = []
-    # Memory middleware first: injects relevant memories into context
-    if MEM0_ENABLED:
-        middleware.append(MemoryMiddleware())
+    # Memory middleware first: injects UserProfile + relevant soft memories
+    middleware.append(MemoryMiddleware())
     middleware.extend([
         SkillInjectionMiddleware(),  # Inject relevant skill content based on query
         LocalTraceMiddleware(),      # Traces the MODIFIED messages
