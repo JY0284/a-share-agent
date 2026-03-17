@@ -1,20 +1,31 @@
-"""Memory middleware for automatic memory retrieval and storage.
+"""Memory middleware – dual-layer context injection.
 
-This middleware:
-1. BEFORE the model is called: searches mem0 for relevant memories based on the
-   user's latest message, and injects them as context in the system prompt.
-2. AFTER the agent runs: stores the conversation turn in mem0 for future recall.
+Layer 1 – **Structured UserProfile** (ALWAYS injected):
+  Loads the Pydantic UserProfile from JSON (portfolio, preferences, watchlist,
+  strategies).  Fast, deterministic, no LLM / embedding overhead.
+
+Layer 2 – **Soft mem0 memories** (BEST-EFFORT):
+  Searches Qdrant for conversational facts (opinions, past discussions).
+  Uses Chinese-optimised embeddings (bge-small-zh-v1.5).
+
+Both layers are merged into a single context block appended to the system
+message so the model sees the user's full context on every turn.
 
 The user_id is read from runtime.config.configurable.user_id (injected by the
-Next.js proxy from the authenticated session).
+Next.js proxy from the authenticated session).  Falls back to 'dev_user'
+during local development.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from typing import Any, Awaitable, Callable, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
+
+_logger = logging.getLogger(__name__)
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest
 
 from agent.memory import (
@@ -23,10 +34,22 @@ from agent.memory import (
     add_memory,
     get_memory,
 )
+from agent.user_profile import get_or_create_profile, format_full_profile_context
+from agent.prompts import get_current_datetime_block
+
+_DEFAULT_USER_ID = os.environ.get("DEFAULT_USER_ID", "dev_user")
 
 
-def _get_user_id_from_runtime(runtime: Any) -> Optional[str]:
-    """Extract user_id from runtime.config.configurable.user_id."""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_user_id_from_runtime(runtime: Any) -> str:
+    """Extract user_id from runtime.config.configurable.user_id.
+
+    Always returns a usable string (falls back to dev_user).
+    """
     try:
         config = getattr(runtime, "config", None)
         if isinstance(config, dict):
@@ -50,7 +73,8 @@ def _get_user_id_from_runtime(runtime: Any) -> Optional[str]:
                 return str(uid)
     except Exception:
         pass
-    return None
+    _logger.warning("No user_id found in runtime — falling back to '%s'", _DEFAULT_USER_ID)
+    return _DEFAULT_USER_ID
 
 
 def _get_last_human_content(messages: list) -> Optional[str]:
@@ -61,9 +85,12 @@ def _get_last_human_content(messages: list) -> Optional[str]:
             if isinstance(content, str):
                 return content
             if isinstance(content, list):
-                parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+                parts = [
+                    p.get("text", "")
+                    for p in content
+                    if isinstance(p, dict) and p.get("type") == "text"
+                ]
                 return " ".join(parts) if parts else None
-        # Also handle dict-style messages
         if isinstance(msg, dict) and msg.get("type") == "human":
             c = msg.get("content")
             if isinstance(c, str):
@@ -71,11 +98,16 @@ def _get_last_human_content(messages: list) -> Optional[str]:
     return None
 
 
-class MemoryMiddleware(AgentMiddleware[Any, Any]):
-    """LangGraph middleware that provides automatic per-user memory.
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
 
-    Inherits from AgentMiddleware and uses awrap_model_call to inject
-    relevant memories into the system message before each model call.
+
+class MemoryMiddleware(AgentMiddleware[Any, Any]):
+    """Dual-layer memory middleware: structured UserProfile + soft mem0.
+
+    Inherits from AgentMiddleware and intercepts model calls to inject
+    the user's full context into the system message.
     """
 
     tools: list = []  # Required by AgentMiddleware interface
@@ -84,106 +116,137 @@ class MemoryMiddleware(AgentMiddleware[Any, Any]):
         self.max_memories = max_memories
 
     # ------------------------------------------------------------------
-    # Model call wrapper: inject memories before each model call
+    # Build the combined context block
     # ------------------------------------------------------------------
 
-    def _build_memory_block(self, memories: list[dict]) -> Optional[str]:
-        """Build a memory context block from a list of memory dicts."""
-        memory_lines: list[str] = []
-        for mem in memories:
-            text = mem.get("memory", str(mem)) if isinstance(mem, dict) else str(mem)
-            memory_lines.append(f"  - {text}")
+    def _build_context_block(
+        self,
+        profile_text: str | None,
+        memories: list[dict] | None,
+    ) -> str | None:
+        """Merge live datetime + structured profile + soft memories into one text block."""
+        parts: list[str] = []
 
-        if not memory_lines:
+        # Layer 0 — live datetime (always injected, never stale)
+        parts.append(get_current_datetime_block())
+
+        # Layer 1 — structured profile (always present if profile exists)
+        if profile_text:
+            parts.append(profile_text)
+
+        # Layer 2 — soft memories from mem0
+        if memories:
+            mem_lines = []
+            for mem in memories:
+                text = mem.get("memory", str(mem)) if isinstance(mem, dict) else str(mem)
+                mem_lines.append(f"  - {text}")
+            if mem_lines:
+                parts.append(
+                    "\n## 📝 Conversational Memory (soft – from previous chats)\n"
+                    + "\n".join(mem_lines)
+                )
+
+        if not parts:
             return None
 
-        return (
-            "\n\n## 📝 User Memory (from previous conversations)\n"
-            "The following facts are remembered about this user. "
-            "Use them to personalise your response:\n"
-            + "\n".join(memory_lines)
-            + "\n"
-        )
+        return "\n\n" + "\n".join(parts) + "\n"
+
+    def _load_profile_text(self, user_id: str) -> str | None:
+        """Load structured UserProfile and format for injection."""
+        try:
+            profile = get_or_create_profile(user_id)
+            text = format_full_profile_context(profile)
+            return text if text else None
+        except Exception as exc:
+            print(f"[memory-middleware] profile load error: {exc}")
+            return None
+
+    def _inject_context(
+        self, request: ModelRequest, context_block: str
+    ) -> ModelRequest:
+        """Insert context as a SEPARATE message, keeping system_message untouched.
+
+        Why: Model providers (DeepSeek, OpenAI, etc.) cache based on the
+        token prefix.  If we modify system_message with per-request data
+        (datetime, profile, memories), the prefix changes every call and
+        the cache hit-rate drops to zero.  By leaving system_message static
+        and prepending the dynamic context as a new message in the messages
+        list, the static system prompt stays a stable, cacheable prefix.
+        """
+        context_msg = SystemMessage(content=context_block.strip())
+        new_messages = [context_msg] + list(request.messages or [])
+        return request.override(messages=new_messages)
+
+    # ------------------------------------------------------------------
+    # Async wrapper
+    # ------------------------------------------------------------------
 
     async def awrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[Any]],
     ) -> Any:
-        """Inject relevant memories into the system message before the model call."""
-        if not MEM0_ENABLED or get_memory() is None:
-            return await handler(request)
-
+        """Inject structured profile + soft memories before each model call."""
         user_id = _get_user_id_from_runtime(request.runtime)
-        if not user_id:
+
+        # Layer 1 — structured profile (sync, fast JSON read)
+        profile_text = await asyncio.to_thread(self._load_profile_text, user_id)
+
+        # Layer 2 — soft mem0 (best-effort)
+        memories: list[dict] = []
+        if MEM0_ENABLED and get_memory() is not None:
+            latest_human = _get_last_human_content(list(request.messages or []))
+            if latest_human:
+                try:
+                    memories = await asyncio.to_thread(
+                        search_memories, latest_human, user_id, limit=self.max_memories
+                    )
+                except Exception as exc:
+                    print(f"[memory-middleware] mem0 search error (non-fatal): {exc}")
+
+        context_block = self._build_context_block(profile_text, memories)
+        if not context_block:
             return await handler(request)
 
-        messages = list(request.messages or [])
-        latest_human = _get_last_human_content(messages)
-        if not latest_human:
-            return await handler(request)
+        return await handler(self._inject_context(request, context_block))
 
-        # Search for relevant memories (run in thread to avoid blocking)
-        memories = await asyncio.to_thread(
-            search_memories, latest_human, user_id, limit=self.max_memories
-        )
-        if not memories:
-            return await handler(request)
-
-        memory_block = self._build_memory_block(memories)
-        if not memory_block:
-            return await handler(request)
-
-        # Inject memory block into the system message
-        if request.system_message is not None:
-            new_content = [
-                *request.system_message.content_blocks,
-                {"type": "text", "text": memory_block},
-            ]
-        else:
-            new_content = [{"type": "text", "text": memory_block.strip()}]
-
-        new_system_message = SystemMessage(content=new_content)
-        return await handler(request.override(system_message=new_system_message))
+    # ------------------------------------------------------------------
+    # Sync wrapper
+    # ------------------------------------------------------------------
 
     def wrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Any],
     ) -> Any:
-        """Sync version: inject relevant memories into the system message."""
-        if not MEM0_ENABLED or get_memory() is None:
-            return handler(request)
-
+        """Sync version of dual-layer context injection."""
         user_id = _get_user_id_from_runtime(request.runtime)
-        if not user_id:
+
+        # Layer 1 — structured profile
+        profile_text = self._load_profile_text(user_id)
+
+        # Layer 2 — soft mem0
+        memories: list[dict] = []
+        if MEM0_ENABLED and get_memory() is not None:
+            latest_human = _get_last_human_content(list(request.messages or []))
+            if latest_human:
+                try:
+                    memories = search_memories(
+                        latest_human, user_id, limit=self.max_memories
+                    )
+                except Exception as exc:
+                    print(f"[memory-middleware] mem0 search error (non-fatal): {exc}")
+
+        context_block = self._build_context_block(profile_text, memories)
+        if not context_block:
             return handler(request)
 
-        messages = list(request.messages or [])
-        latest_human = _get_last_human_content(messages)
-        if not latest_human:
-            return handler(request)
+        return handler(self._inject_context(request, context_block))
 
-        # Search for relevant memories (sync)
-        memories = search_memories(latest_human, user_id, limit=self.max_memories)
-        if not memories:
-            return handler(request)
 
-        memory_block = self._build_memory_block(memories)
-        if not memory_block:
-            return handler(request)
-
-        # Inject memory block into the system message
-        if request.system_message is not None:
-            new_content = [
-                *request.system_message.content_blocks,
-                {"type": "text", "text": memory_block},
-            ]
-        else:
-            new_content = [{"type": "text", "text": memory_block.strip()}]
-
-        new_system_message = SystemMessage(content=new_content)
-        return handler(request.override(system_message=new_system_message))
+# ---------------------------------------------------------------------------
+# Post-processing callback (unchanged, but with dev_user fallback)
+# ---------------------------------------------------------------------------
 
 
 class MemoryStorageCallback:
@@ -197,12 +260,13 @@ class MemoryStorageCallback:
     def store_turn(
         user_message: str,
         assistant_message: str,
-        user_id: str,
+        user_id: str | None = None,
     ) -> None:
         """Store a single conversation turn as a memory."""
         if not MEM0_ENABLED or get_memory() is None:
             return
-        if not user_id or not user_message:
+        user_id = user_id or _DEFAULT_USER_ID
+        if not user_message:
             return
 
         messages = [

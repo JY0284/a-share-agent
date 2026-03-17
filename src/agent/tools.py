@@ -2172,39 +2172,24 @@ ALL_TOOLS = [
     tool_peer_comparison,
     tool_search_and_load_skill,
     tool_backtest_strategy,
-    # Discovery (when composite tools don't cover the case)
+    # Discovery
     tool_list_industries,
     tool_get_universe,
-    # Simple Data (for basic lookups, no calculation)
+    # Simple Data (focused lookups)
     tool_get_daily_prices,
-    tool_get_daily_adj_prices,
     tool_get_daily_basic,
-    tool_get_weekly_prices,
-    tool_get_monthly_prices,
     tool_get_index_daily_prices,
     tool_get_etf_daily_prices,
     tool_get_fund_nav,
-    tool_get_fund_share,
-    tool_get_fund_div,
-    tool_get_adj_factor,
-    tool_get_stk_limit,
-    tool_get_suspend_d,
-    tool_get_new_share,
-    tool_get_namechange,
     tool_get_income,
     tool_get_balancesheet,
     tool_get_cashflow,
     tool_get_fina_indicator,
-    tool_get_forecast,
-    tool_get_express,
     tool_get_dividend,
-    tool_get_fina_audit,
-    tool_get_fina_mainbz,
-    tool_get_disclosure_date,
-    # Market Extras (资金流向/外汇)
+    # Market Extras
     tool_get_moneyflow,
     tool_get_fx_daily,
-    # Macro (宏观数据)
+    # Macro
     tool_get_lpr,
     tool_get_cpi,
     tool_get_cn_sf,
@@ -2214,9 +2199,6 @@ ALL_TOOLS = [
     tool_is_trading_day,
     tool_get_prev_trade_date,
     tool_get_next_trade_date,
-    # Skills (single-call)
-    tool_list_skills,
     # Python Execution (for complex analysis only)
     tool_execute_python,
-    tool_clear_python_session,
 ]
