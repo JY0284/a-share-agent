@@ -83,6 +83,7 @@ def tool_update_portfolio(
     total_assets: float = 0,
     total_market_value: float = 0,
     cash: float = 0,
+    mode: str = "merge",
     *,
     config: RunnableConfig,
 ) -> dict:
@@ -111,9 +112,13 @@ def tool_update_portfolio(
         total_assets: Total account assets (总资产)
         total_market_value: Sum of position market values (总市值)
         cash: Available cash (可用资金)
+        mode: "merge" (default) — add/update given holdings, keep others.
+              "replace" — overwrite all holdings with the given list.
+              Use "merge" when user shares partial updates.
+              Use "replace" only when user shares their COMPLETE portfolio.
 
     Returns:
-        {saved: bool, diff: {added, removed, kept_count}, profile_summary: str}
+        {saved: bool, mode: str, diff: {added, removed, kept_count}, profile_summary: str}
     """
     user_id = _get_user_id(config)
     return update_portfolio(
@@ -122,6 +127,7 @@ def tool_update_portfolio(
         total_assets=total_assets,
         total_market_value=total_market_value,
         cash=cash,
+        mode=mode,
     )
 
 

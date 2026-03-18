@@ -208,8 +208,9 @@ def update_portfolio(
     total_assets: float = 0,
     total_market_value: float = 0,
     cash: float = 0,
+    mode: str = "replace",
 ) -> dict:
-    """Replace the user's portfolio with new data, storing a snapshot of the old one.
+    """Update the user's portfolio, storing a snapshot of the old one.
 
     Args:
         user_id: The user identifier.
@@ -217,6 +218,9 @@ def update_portfolio(
         total_assets: Total account assets.
         total_market_value: Sum of all position market values.
         cash: Available cash.
+        mode: "replace" (default) overwrites all holdings.
+              "merge" adds/updates the given holdings while keeping
+              existing ones that are not mentioned.
 
     Returns:
         {saved: bool, diff: {...}, profile_summary: str}
@@ -236,17 +240,26 @@ def update_portfolio(
         if len(profile.snapshots) > _MAX_SNAPSHOTS:
             profile.snapshots = profile.snapshots[-_MAX_SNAPSHOTS:]
 
-    # Validate holdings individually — save valid ones, report failures
+    # Validate new holdings individually
     old_codes = {h.ts_code or h.name for h in profile.holdings}
-    new_holdings: list[Holding] = []
+    incoming: list[Holding] = []
     validation_errors: list[dict] = []
     for i, h in enumerate(holdings):
         try:
-            new_holdings.append(Holding.model_validate(h))
+            incoming.append(Holding.model_validate(h))
         except Exception as exc:
             name = h.get("name", f"holding[{i}]") if isinstance(h, dict) else f"holding[{i}]"
             validation_errors.append({"index": i, "name": name, "error": str(exc)})
             logger.warning("[user_profile] Skipped invalid holding %s: %s", name, exc)
+
+    if mode == "merge":
+        # Build a lookup of existing holdings keyed by (ts_code or name)
+        existing_map = {(h.ts_code or h.name): h for h in profile.holdings}
+        for h in incoming:
+            existing_map[h.ts_code or h.name] = h  # add or overwrite
+        new_holdings = list(existing_map.values())
+    else:
+        new_holdings = incoming
 
     new_codes = {h.ts_code or h.name for h in new_holdings}
     added = new_codes - old_codes
@@ -255,14 +268,18 @@ def update_portfolio(
 
     # Update
     profile.holdings = new_holdings
-    profile.total_assets = total_assets
-    profile.total_market_value = total_market_value
-    profile.cash = cash
+    if total_assets:
+        profile.total_assets = total_assets
+    if total_market_value:
+        profile.total_market_value = total_market_value
+    if cash:
+        profile.cash = cash
 
     save_profile(profile)
 
     result: dict = {
         "saved": True,
+        "mode": mode,
         "diff": {
             "added": sorted(added),
             "removed": sorted(removed),
