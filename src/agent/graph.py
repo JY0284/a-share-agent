@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import TodoListMiddleware
 from langchain_deepseek import ChatDeepSeek
 
 from agent.prompts import get_system_prompt
@@ -18,6 +17,7 @@ from agent.memory import MEMORY_TOOLS, MEM0_ENABLED
 from agent.memory_middleware import MemoryMiddleware
 from agent.profile_tools import PROFILE_TOOLS
 from agent.batch_tools import BATCH_TOOLS
+from agent.todo_middleware import InvestmentTodoMiddleware
 
 # Initialize the DeepSeek model
 model = ChatDeepSeek(
@@ -48,7 +48,7 @@ def get_middleware():
         SkillInjectionMiddleware(),  # Inject relevant skill content based on query
         LocalTraceMiddleware(),      # Traces the MODIFIED messages
         PythonGuardMiddleware(),
-        TodoListMiddleware(),
+        InvestmentTodoMiddleware(),
     ])
     return middleware
 
