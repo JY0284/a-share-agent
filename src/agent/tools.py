@@ -1712,8 +1712,60 @@ def tool_stock_snapshot(query: str) -> dict:
             top = rows[0]
             ts_code = top.get("ts_code")
             stock_info = top
-        else:
-            return {"error": f"未找到匹配 '{query}' 的股票", "stock": None}
+
+    # Fallback: try fund/ETF universe (etf_basic → fund_basic)
+    import re as _re_snap
+    _bare = _re_snap.match(r'^(\d{6})$', query.strip())
+    _full = _re_snap.match(r'^(\d{6})\.(SH|SZ|BJ)$', query.strip(), _re_snap.I)
+
+    if ts_code is None:
+        try:
+            if _full or ("." in query and len(query) <= 12):
+                fr = get_fund_basic(ts_code=query.strip().upper(), store_dir=STORE_DIR)
+            elif _bare:
+                # Try both exchanges
+                fr = {"rows": []}
+                for _sfx in (".SH", ".SZ"):
+                    try:
+                        _r = get_fund_basic(ts_code=f"{_bare.group(1)}{_sfx}", store_dir=STORE_DIR)
+                        fr["rows"].extend(_r.get("rows") or [])
+                    except Exception:
+                        pass
+            else:
+                fr = get_fund_basic(name_contains=query, offset=0, limit=3, store_dir=STORE_DIR)
+            fund_rows = fr.get("rows") or []
+            if fund_rows:
+                stock_info = fund_rows[0]
+                ts_code = stock_info.get("ts_code")
+                stock_info["_asset_type"] = "fund"
+        except Exception:
+            pass
+
+    # Fallback: try index universe
+    if ts_code is None:
+        try:
+            if _full or ("." in query and len(query) <= 12):
+                ir = get_index_basic(ts_code=query.strip().upper(), store_dir=STORE_DIR)
+            elif _bare:
+                ir = {"rows": []}
+                for _sfx in (".SH", ".SZ"):
+                    try:
+                        _r = get_index_basic(ts_code=f"{_bare.group(1)}{_sfx}", store_dir=STORE_DIR)
+                        ir["rows"].extend(_r.get("rows") or [])
+                    except Exception:
+                        pass
+            else:
+                ir = get_index_basic(name_contains=query, offset=0, limit=3, store_dir=STORE_DIR)
+            idx_rows = ir.get("rows") or []
+            if idx_rows:
+                stock_info = idx_rows[0]
+                ts_code = stock_info.get("ts_code")
+                stock_info["_asset_type"] = "index"
+        except Exception:
+            pass
+
+    if ts_code is None:
+        return {"error": f"未找到匹配 '{query}' 的股票/ETF/指数", "stock": None}
 
     result["stock"] = stock_info
 
@@ -1736,29 +1788,45 @@ def tool_stock_snapshot(query: str) -> dict:
     except Exception:
         result["data_freshness"] = {"conclusion": "无法获取", "categories": []}
 
-    # 4) Latest prices (last 10 trading days)
+    # 4) Latest prices (last 10 trading days) — branch by asset type
+    asset_type = (stock_info or {}).get("_asset_type", "stock")
     try:
-        prices = get_daily_prices(
-            ts_code, start_date=None, end_date=None, offset=0, limit=10, store_dir=STORE_DIR
-        )
+        if asset_type == "fund":
+            prices = get_etf_daily_prices(
+                ts_code, start_date=None, end_date=None, offset=0, limit=10, store_dir=STORE_DIR
+            )
+        elif asset_type == "index":
+            prices = get_index_daily_prices(
+                ts_code, start_date=None, end_date=None, offset=0, limit=10, store_dir=STORE_DIR
+            )
+        else:
+            prices = get_daily_prices(
+                ts_code, start_date=None, end_date=None, offset=0, limit=10, store_dir=STORE_DIR
+            )
         result["latest_prices"] = prices.get("rows", [])
     except Exception:
         result["latest_prices"] = []
 
-    # 5) Latest valuation (last 5 rows)
-    try:
-        basic = get_daily_basic(
-            ts_code, start_date=None, end_date=None, offset=0, limit=5, store_dir=STORE_DIR
-        )
-        result["latest_valuation"] = basic.get("rows", [])
-    except Exception:
+    # 5) Latest valuation (last 5 rows) — only for stocks
+    if asset_type == "stock":
+        try:
+            basic = get_daily_basic(
+                ts_code, start_date=None, end_date=None, offset=0, limit=5, store_dir=STORE_DIR
+            )
+            result["latest_valuation"] = basic.get("rows", [])
+        except Exception:
+            result["latest_valuation"] = []
+    else:
         result["latest_valuation"] = []
 
-    # 6) Company profile
-    try:
-        company = get_stock_company(ts_code, store_dir=STORE_DIR)
-        result["company"] = company if company.get("found") else None
-    except Exception:
+    # 6) Company profile — only for stocks
+    if asset_type == "stock":
+        try:
+            company = get_stock_company(ts_code, store_dir=STORE_DIR)
+            result["company"] = company if company.get("found") else None
+        except Exception:
+            result["company"] = None
+    else:
         result["company"] = None
 
     return result
