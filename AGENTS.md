@@ -57,6 +57,31 @@ Chat UI (Next.js :3000) ──► LangGraph Server (:2024) ──► stock_data 
 - **Figures**: Matplotlib output captured and stored per-thread in `assets/`
 - **Traces**: JSONL logs written to `../a-share-agent-traces/`
 
+## Billing / Cost Pipeline
+
+Cost tracking flows through these stages:
+
+```
+DeepSeek API response (usage_metadata)
+  → trace_middleware._attach_usage_cost()
+      → usage_cost.extract_usage()        # normalise token counts
+      → usage_cost.estimate_cost()        # RMB cost via pricing.json
+  → writes cost into AIMessage.additional_kwargs & response_metadata
+  → trace_middleware writes model_end event (JSONL trace)
+  → LangGraph serialises messages into SSE stream
+  → chat-ui extractCostFromSseEvent() sums costs from all AI messages
+  → chat-ui deductCost() subtracts from SQLite balance
+```
+
+- **Pricing config**: `pricing.json` — DeepSeek cache_hit/cache_miss/output rates in RMB.
+- **Cache**: `load_pricing()` reads the file once and caches in `_PRICING_CACHE`. The cache is
+  pre-loaded at import time to avoid synchronous file I/O inside async middleware (see Gotchas).
+- **Cost attachment**: `_attach_usage_cost()` mutates the AIMessage in-place, adding
+  `additional_kwargs.cost.total` and `response_metadata.cost.total` (both in RMB).
+- **Overdraft protection**: the chat-ui `deductCost()` uses an atomic SQL guard
+  (`WHERE balance >= cost`) so concurrent requests cannot push the balance below zero.
+  The proxy also enforces a per-user concurrency limit (1 active run, HTTP 429).
+
 ## Source Layout
 
 ```
@@ -79,7 +104,7 @@ a-share-agent/
 │   ├── local_trace.py
 │   ├── figure_service.py       # Thread-scoped figure storage
 │   ├── web_search.py           # Tavily web search tools
-│   ├── token_usage.py          # Token usage + cost estimation
+│   ├── usage_cost.py            # Token usage + cost estimation
 │   └── routines/
 │       └── daily_briefing.py   # Personalized daily report generator
 ├── skills/                     # 24 skill directories (YAML frontmatter + MD)
@@ -145,6 +170,15 @@ a-share-agent/
 - `SystemMessage.content_blocks` is read-only in LangChain — mock with `MagicMock()` in tests.
 - Dev persistence uses pickle (`.langgraph_api/`), prod uses PostgreSQL — don't assume format.
 - `pricing.json` uses RMB (not USD) for DeepSeek token costs.
+- **BlockBuster & sync I/O in async middleware**: `langgraph dev` enables BlockBuster, which
+  raises exceptions on synchronous file I/O inside `async` functions. `load_pricing()` reads
+  `pricing.json` from disk — if the cache is cold and the first call happens inside
+  `awrap_model_call`, BlockBuster kills it and `except Exception: pass` silently drops the
+  entire cost pipeline + `model_end` trace event. Fix: `usage_cost.py` eagerly calls
+  `load_pricing()` at import time, and `LocalTraceMiddleware.__init__` also warms the cache.
+  **Any new code that reads files must either pre-load at import or use `asyncio.to_thread()`.**
+- **Trace diagnosis**: if `model_end` events stop appearing in trace JSONL files but `model_start`
+  events are present, the cost pipeline is crashing silently — check BlockBuster / sync I/O first.
 
 ## Maintaining This File
 

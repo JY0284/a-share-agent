@@ -19,7 +19,7 @@ from langchain.agents.middleware.types import (
 
 from agent.sandbox import set_python_session_id, set_thread_id
 from agent.trace import get_trace_writer
-from agent.usage_cost import compute_usage_and_cost
+from agent.usage_cost import compute_usage_and_cost, load_pricing
 
 TContext = TypeVar("TContext")
 TState = TypeVar("TState")
@@ -91,6 +91,9 @@ def _attach_usage_cost(messages: list[BaseMessage], model_name: str | None) -> d
     total_in = 0
     total_out = 0
     total_tokens = 0
+    total_cache_hit = 0
+    total_cache_miss = 0
+    total_reasoning = 0
     total_cost = 0.0
     currency: str | None = None
     has_usage = False
@@ -109,6 +112,9 @@ def _attach_usage_cost(messages: list[BaseMessage], model_name: str | None) -> d
             total_in += int(usage.get("input_tokens", 0) or 0)
             total_out += int(usage.get("output_tokens", 0) or 0)
             total_tokens += int(usage.get("total_tokens", 0) or 0)
+            total_cache_hit += int(usage.get("input_cache_hit_tokens", 0) or 0)
+            total_cache_miss += int(usage.get("input_cache_miss_tokens", 0) or 0)
+            total_reasoning += int(usage.get("reasoning_tokens", 0) or 0)
 
             # Attach to additional_kwargs (preferred for serialization)
             ak = getattr(m, "additional_kwargs", None)
@@ -160,13 +166,18 @@ def _attach_usage_cost(messages: list[BaseMessage], model_name: str | None) -> d
     if not has_usage:
         return None
 
-    out: dict[str, Any] = {
-        "usage": {
-            "input_tokens": total_in,
-            "output_tokens": total_out,
-            "total_tokens": total_tokens,
-        }
+    usage_summary: dict[str, Any] = {
+        "input_tokens": total_in,
+        "output_tokens": total_out,
+        "total_tokens": total_tokens,
     }
+    if total_cache_hit or total_cache_miss:
+        usage_summary["input_cache_hit_tokens"] = total_cache_hit
+        usage_summary["input_cache_miss_tokens"] = total_cache_miss
+    if total_reasoning:
+        usage_summary["reasoning_tokens"] = total_reasoning
+
+    out: dict[str, Any] = {"usage": usage_summary}
     if has_cost:
         out["cost"] = {"currency": currency or "USD", "total": round(total_cost, 6)}
     return out
@@ -185,6 +196,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         self._max_payload_chars = int(max_payload_chars)
         # Per-run trace id (ContextVar so it works across model/tool calls in the same run)
         self._trace_id_var: ContextVar[str | None] = ContextVar("agent_trace_id", default=None)
+        # Eagerly warm the pricing cache so awrap_model_call never
+        # triggers synchronous file I/O (which BlockBuster would block).
+        try:
+            load_pricing()
+        except Exception:
+            pass
 
     def before_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         """Initialize a per-run trace id as early as possible."""

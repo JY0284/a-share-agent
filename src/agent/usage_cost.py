@@ -119,6 +119,15 @@ def extract_usage(ai_msg: Any) -> dict[str, Any] | None:
     if not usage.get("total_tokens"):
         usage["total_tokens"] = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
 
+    # Derive cache_miss from (input_tokens - cache_hit) when the provider
+    # reports cache_hit but not cache_miss (e.g. LangChain usage_metadata has
+    # cache_read but no cache_creation).
+    cache_hit = usage.get("input_cache_hit_tokens")
+    cache_miss = usage.get("input_cache_miss_tokens")
+    if cache_hit is not None and cache_miss is None:
+        input_total = usage.get("input_tokens", 0)
+        usage["input_cache_miss_tokens"] = max(0, input_total - cache_hit)
+
     return usage
 
 
@@ -223,3 +232,19 @@ def compute_usage_and_cost(ai_msg: Any, model_name: str | None = None) -> dict[s
     usage = extract_usage(ai_msg)
     cost = estimate_cost(usage, model_name=model_name) if usage else None
     return {"usage": usage, "cost": cost}
+
+
+# ---------------------------------------------------------------------------
+# Eagerly load pricing at import time.
+#
+# ``langgraph dev`` enables BlockBuster, which blocks *synchronous* file I/O
+# inside async functions.  ``estimate_cost`` → ``load_pricing()`` reads
+# pricing.json from disk.  If the first call happens inside
+# ``awrap_model_call`` (async), BlockBuster raises and the entire cost
+# pipeline silently fails.  Pre-loading here (sync import context) populates
+# ``_PRICING_CACHE`` so no file I/O happens at runtime.
+# ---------------------------------------------------------------------------
+try:
+    load_pricing()
+except Exception:
+    pass
