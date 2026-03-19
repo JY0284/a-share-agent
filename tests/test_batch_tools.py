@@ -83,7 +83,6 @@ class TestBatchQuotes:
     def test_with_explicit_types(self):
         result = bt.tool_batch_quotes.invoke({
             "ts_codes": ["000300.SH", "510300.SH"],
-            "asset_types": ["index", "etf"],
         })
         assert result["count"] == 2
         # Index uses mock that returns 3200

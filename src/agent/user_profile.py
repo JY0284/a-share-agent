@@ -26,7 +26,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +45,21 @@ class Holding(BaseModel):
     pnl: float = Field(0, description="Unrealised P&L (元)")
     pnl_pct: float = Field(0, description="Unrealised P&L percentage, e.g. -0.15 = -15%")
     tags: list[str] = Field(default_factory=list, description="User-defined tags, e.g. ['美股科技', 'QDII']")
+
+    @model_validator(mode="after")
+    def _infer_and_validate(self) -> "Holding":
+        """Auto-infer missing fields and recompute P&L when possible."""
+        # Infer shares from market_value + current_price
+        if self.shares == 0 and self.market_value > 0 and self.current_price > 0:
+            self.shares = round(self.market_value / self.current_price, 2)
+        # Infer market_value from shares + current_price
+        if self.shares > 0 and self.current_price > 0 and self.market_value == 0:
+            self.market_value = round(self.shares * self.current_price, 2)
+        # Recompute P&L if we have enough data
+        if self.shares > 0 and self.cost_price > 0 and self.current_price > 0:
+            self.pnl = round(self.shares * (self.current_price - self.cost_price), 2)
+            self.pnl_pct = round((self.current_price - self.cost_price) / self.cost_price, 5)
+        return self
 
 
 class WatchlistItem(BaseModel):

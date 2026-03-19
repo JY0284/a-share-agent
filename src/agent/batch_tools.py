@@ -57,26 +57,41 @@ KEY_INDICES = [
 _KEY_INDICES = KEY_INDICES
 
 
-def fetch_latest_price(ts_code: str, asset_type: str = "stock") -> dict:
-    """Fetch latest 1-day price for a single ts_code. Returns a summary dict."""
-    try:
-        if asset_type in ("index", "index_etf_underlying"):
-            rows = get_index_daily_prices(
-                ts_code, start_date=None, end_date=None, offset=0, limit=1, store_dir=STORE_DIR
-            ).get("rows", [])
-        elif asset_type in ("etf", "qdii", "index_etf", "bond_fund"):
-            rows = get_etf_daily_prices(
-                ts_code, start_date=None, end_date=None, offset=0, limit=1, store_dir=STORE_DIR
-            ).get("rows", [])
-        else:
-            rows = get_daily_prices(
-                ts_code, start_date=None, end_date=None, offset=0, limit=1, store_dir=STORE_DIR
-            ).get("rows", [])
-        if rows:
-            return {"ts_code": ts_code, "found": True, **rows[0]}
-        return {"ts_code": ts_code, "found": False}
-    except Exception as e:
-        return {"ts_code": ts_code, "found": False, "error": str(e)}
+def fetch_latest_price(ts_code: str, asset_type: str | None = None) -> dict:
+    """Fetch latest 1-day price for a single ts_code.
+
+    Tries all data sources (stock daily, ETF daily, index daily) and returns
+    the first hit.  *asset_type* is used only as a priority hint so the most
+    likely source is tried first — but every source is attempted as fallback.
+    """
+    fetchers: list[tuple[str, callable]] = [
+        ("stock", lambda: get_daily_prices(
+            ts_code, start_date=None, end_date=None, offset=0, limit=1, store_dir=STORE_DIR)),
+        ("etf", lambda: get_etf_daily_prices(
+            ts_code, start_date=None, end_date=None, offset=0, limit=1, store_dir=STORE_DIR)),
+        ("index", lambda: get_index_daily_prices(
+            ts_code, start_date=None, end_date=None, offset=0, limit=1, store_dir=STORE_DIR)),
+    ]
+
+    # Use hint (explicit or auto-detected) to try the most likely source first
+    hint = asset_type or _detect_asset_type(ts_code)
+    _HINT_TO_SOURCE = {
+        "stock": "stock", "etf": "etf", "qdii": "etf", "index_etf": "etf",
+        "bond_fund": "etf", "fund": "etf", "index": "index",
+        "index_etf_underlying": "index",
+    }
+    first = _HINT_TO_SOURCE.get(hint, "stock")
+    fetchers.sort(key=lambda x: (0 if x[0] == first else 1))
+
+    for source, fetcher in fetchers:
+        try:
+            rows = fetcher().get("rows", [])
+            if rows:
+                return {"ts_code": ts_code, "found": True, "source": source, **rows[0]}
+        except Exception:
+            continue
+
+    return {"ts_code": ts_code, "found": False}
 
 
 # Backward-compat alias
@@ -108,34 +123,25 @@ def _detect_asset_type(code: str) -> str:
 @tool
 def tool_batch_quotes(
     ts_codes: list[str],
-    asset_types: list[str] | None = None,
 ) -> dict:
     """Fetch latest price for multiple assets in one call.
 
     Use this to get current prices for a list of stocks/ETFs/indices instead
     of calling tool_get_daily_prices / tool_get_etf_daily_prices one by one.
+    Asset type is auto-detected — no need to specify it.
 
     Args:
         ts_codes: List of ts_codes, e.g. ["600519.SH", "513800.SH", "000300.SH"]
-        asset_types: Parallel list of asset types for each ts_code.
-            Options per element: "stock" | "etf" | "qdii" | "index" | "index_etf"
-            If omitted, auto-detects based on ts_code patterns.
 
     Returns:
-        {quotes: [{ts_code, found, trade_date, close, pct_chg, ...}], count: N}
+        {quotes: [{ts_code, found, source, trade_date, close, pct_chg, ...}], count: N}
     """
-    types = list(asset_types or [])
-
-    # Auto-detect asset types for any missing entries
-    while len(types) < len(ts_codes):
-        types.append(_detect_asset_type(ts_codes[len(types)]))
-
-    # Parallel fetch
+    # Parallel fetch — each fetch_latest_price tries all sources internally
     quotes: list[dict] = [None] * len(ts_codes)  # type: ignore[list-item]
     with ThreadPoolExecutor(max_workers=min(len(ts_codes), 8) or 1) as pool:
         futures = {
-            pool.submit(fetch_latest_price, code, atype): idx
-            for idx, (code, atype) in enumerate(zip(ts_codes, types))
+            pool.submit(fetch_latest_price, code): idx
+            for idx, code in enumerate(ts_codes)
         }
         for future in as_completed(futures):
             quotes[futures[future]] = future.result()
@@ -191,9 +197,9 @@ def tool_portfolio_live_snapshot(*, config: RunnableConfig) -> dict:
 
     # Parallel-fetch all resolvable holdings + all key indices
     with ThreadPoolExecutor(max_workers=min(len(resolvable) + len(KEY_INDICES), 10) or 1) as pool:
-        # Submit holding fetches
+        # Submit holding fetches (asset_type used as hint only)
         h_futures = {
-            pool.submit(fetch_latest_price, h.ts_code, h.asset_type): (idx, h)
+            pool.submit(fetch_latest_price, h.ts_code, h.asset_type or None): (idx, h)
             for idx, h in resolvable
         }
         # Submit index fetches
