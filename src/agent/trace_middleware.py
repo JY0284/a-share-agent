@@ -300,6 +300,37 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         self._trace_id_var.set(new_id)
         return new_id
 
+    def _get_user_id(self, runtime: Any) -> str | None:
+        """Extract user_id from runtime config.configurable (injected by chat-ui proxy).
+
+        Falls back to runtime.context.user_id (same strategy as memory_middleware).
+        """
+        # 1) Try runtime.config.configurable.user_id
+        try:
+            config = getattr(runtime, "config", None)
+            if isinstance(config, dict):
+                configurable = config.get("configurable", {})
+                if isinstance(configurable, dict):
+                    uid = configurable.get("user_id")
+                    if uid:
+                        return str(uid)
+        except Exception:
+            pass
+        # 2) Fallback: try runtime.context.user_id
+        try:
+            ctx = getattr(runtime, "context", None)
+            if isinstance(ctx, dict):
+                uid = ctx.get("user_id")
+                if uid:
+                    return str(uid)
+            if ctx and hasattr(ctx, "user_id"):
+                uid = getattr(ctx, "user_id", None)
+                if uid:
+                    return str(uid)
+        except Exception:
+            pass
+        return None
+
     def _get_thread_id(self, runtime: Any) -> str | None:
         """Extract the actual LangGraph thread_id from runtime config."""
         config = getattr(runtime, "config", None)
@@ -343,6 +374,11 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         actual_thread_id = self._get_thread_id(request.runtime)
         if actual_thread_id:
             set_thread_id(actual_thread_id)
+        
+        # Associate user_id with this run for per-user trace directories
+        user_id = self._get_user_id(request.runtime)
+        if user_id:
+            self._writer.set_user_for_run(run_id, user_id)
         
         try:
             # Log the latest inbound message (usually HumanMessage or ToolMessage)
@@ -410,6 +446,11 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         if actual_thread_id:
             set_thread_id(actual_thread_id)
         
+        # Associate user_id with this run for per-user trace directories
+        user_id = self._get_user_id(request.runtime)
+        if user_id:
+            self._writer.set_user_for_run(run_id, user_id)
+        
         try:
             if request.messages:
                 await self._writer.awrite_event(
@@ -472,6 +513,11 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         actual_thread_id = self._get_thread_id(runtime)
         if actual_thread_id:
             set_thread_id(actual_thread_id)
+        
+        # Associate user_id with this run for per-user trace directories
+        user_id = self._get_user_id(runtime)
+        if user_id:
+            self._writer.set_user_for_run(run_id, user_id)
         
         tool_call = request.tool_call or {}
         name = tool_call.get("name")
@@ -536,6 +582,11 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         actual_thread_id = self._get_thread_id(runtime)
         if actual_thread_id:
             set_thread_id(actual_thread_id)
+        
+        # Associate user_id with this run for per-user trace directories
+        user_id = self._get_user_id(runtime)
+        if user_id:
+            self._writer.set_user_for_run(run_id, user_id)
         
         tool_call = request.tool_call or {}
         name = tool_call.get("name")

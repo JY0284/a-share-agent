@@ -6,7 +6,8 @@ Goal:
 
 Implementation:
 - A middleware logs model calls + tool calls as JSONL (one event per line)
-- Files are saved under: a-share-agent-traces/<datetime>_<run_id>.jsonl
+- Files are saved under: a-share-agent-traces/<user_id>/<datetime>_<run_id>.jsonl
+- Anonymous runs (no user_id) go to: a-share-agent-traces/_anonymous/...
 
 Note:
   ``langgraph dev`` enables BlockBuster which **blocks** synchronous I/O
@@ -42,12 +43,27 @@ def _json_default(o: Any) -> str:
 class TraceWriter:
     trace_dir: Path
     _run_paths: dict = field(default_factory=dict, init=False, repr=False)
+    _run_user_ids: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.trace_dir.mkdir(parents=True, exist_ok=True)
 
+    def set_user_for_run(self, run_id: str, user_id: str) -> None:
+        """Associate a user_id with a run so traces go into per-user dirs.
+
+        Must be called before the first ``path_for_run`` / ``write_event``
+        for that run_id.  If the path was already created, this is a no-op
+        (we keep the first mapping to avoid mid-run directory changes).
+        """
+        if run_id not in self._run_user_ids:
+            self._run_user_ids[run_id] = user_id
+
     def path_for_run(self, run_id: str) -> Path:
         """Return (and cache) the trace file path for a run.
+
+        If a user_id was registered via ``set_user_for_run``, the trace file
+        is placed under ``<trace_dir>/<user_id>/<datetime>_<run_id>.jsonl``.
+        Otherwise it falls back to ``<trace_dir>/_anonymous/...``.
 
         The first call creates a datetime-prefixed filename so traces sort
         chronologically.  Subsequent calls for the same run_id return the
@@ -59,7 +75,17 @@ class TraceWriter:
         if not safe:
             safe = f"run_{int(time.time())}"
         dt_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = self.trace_dir / f"{dt_prefix}_{safe}.jsonl"
+
+        # Per-user subdirectory
+        user_id = self._run_user_ids.get(run_id)
+        if user_id:
+            safe_user = "".join(ch for ch in str(user_id) if ch.isalnum() or ch in ("-", "_", "@", "."))
+        else:
+            safe_user = "_anonymous"
+        user_dir = self.trace_dir / safe_user
+        user_dir.mkdir(parents=True, exist_ok=True)
+
+        path = user_dir / f"{dt_prefix}_{safe}.jsonl"
         self._run_paths[run_id] = path
         return path
 
