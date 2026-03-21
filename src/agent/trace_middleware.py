@@ -33,6 +33,10 @@ from agent.sandbox import set_python_session_id, set_thread_id
 from agent.trace import get_trace_writer
 from agent.usage_cost import compute_usage_and_cost, load_pricing
 
+# Optional spiderman integration (notification on conversation complete)
+import os as _os
+_SPIDERMAN_API_URL = _os.environ.get("SPIDERMAN_API_URL", "")
+
 TContext = TypeVar("TContext")
 TState = TypeVar("TState")
 
@@ -456,6 +460,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         except Exception as exc:
             print(f"[trace] message logging failed: {type(exc).__name__}: {exc}")
 
+        # Spiderman hook: notify when conversation turn completes
+        if _SPIDERMAN_API_URL and result_messages:
+            self._maybe_notify_spiderman(
+                result_messages, run_id, request.runtime, model_name, sync=True
+            )
+
         return resp
 
     async def awrap_model_call(
@@ -492,6 +502,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
                 _get_logged_ids().add(id(m))
         except Exception as exc:
             print(f"[trace] async message logging failed: {type(exc).__name__}: {exc}")
+
+        # Spiderman hook: notify when conversation turn completes
+        if _SPIDERMAN_API_URL and result_messages:
+            self._maybe_notify_spiderman(
+                result_messages, run_id, request.runtime, model_name, sync=False
+            )
 
         return resp
 
@@ -565,4 +581,69 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             print(f"[trace] async tool logging failed: {type(exc).__name__}: {exc}")
 
         return result
+
+    # ------------------------------------------------------------------
+    # Spiderman notification hook
+    # ------------------------------------------------------------------
+
+    def _maybe_notify_spiderman(
+        self,
+        result_messages: list[BaseMessage],
+        run_id: str,
+        runtime: Any,
+        model_name: str | None,
+        *,
+        sync: bool = True,
+    ) -> None:
+        """Fire an agent_result event to spiderman when the LLM responds
+        with no tool_calls (i.e., the conversation turn is complete)."""
+        try:
+            last_msg = result_messages[-1]
+            if not isinstance(last_msg, AIMessage):
+                return
+            if getattr(last_msg, "tool_calls", None):
+                return  # Still has pending tool calls — not done yet
+
+            user_id = self._get_user_display_name(runtime) or "unknown"
+            thread_id = self._get_thread_id(runtime)
+            content = getattr(last_msg, "content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in content
+                )
+            content_preview = content[:2000] if isinstance(content, str) else str(content)[:2000]
+
+            # Extract usage from response_metadata
+            usage = {}
+            rm = getattr(last_msg, "response_metadata", None)
+            if isinstance(rm, dict):
+                usage = rm.get("usage", {})
+
+            import urllib.request
+            import json as _json
+
+            payload = _json.dumps({
+                "event_type": "agent_result",
+                "user_id": user_id,
+                "source": "agent",
+                "payload": {
+                    "thread_id": thread_id,
+                    "run_id": run_id,
+                    "model": model_name,
+                    "final_message": {"role": "assistant", "content": content_preview},
+                    "usage": usage,
+                },
+            }).encode("utf-8")
+
+            url = _SPIDERMAN_API_URL.rstrip("/") + "/api/v1/events"
+            req = urllib.request.Request(
+                url, data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            # Fire-and-forget with short timeout
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass  # Never let spiderman hook break the agent
 
