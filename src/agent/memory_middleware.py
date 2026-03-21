@@ -8,8 +8,9 @@ Layer 2 – **Soft mem0 memories** (BEST-EFFORT):
   Searches Qdrant for conversational facts (opinions, past discussions).
   Uses Chinese-optimised embeddings (bge-small-zh-v1.5).
 
-Both layers are merged into a single context block appended to the system
-message so the model sees the user's full context on every turn.
+Both layers are merged into a context block **prepended to the last
+HumanMessage** so the model sees the user's full context without breaking
+prefix caching.  The system_message stays 100% static.
 
 The user_id is read from runtime.config.configurable.user_id (injected by the
 Next.js proxy from the authenticated session).  Falls back to 'dev_user'
@@ -35,7 +36,7 @@ from agent.memory import (
     get_memory,
 )
 from agent.user_profile import get_or_create_profile, format_full_profile_context
-from agent.prompts import get_current_datetime_block
+from agent.prompts import get_current_date_block
 
 _DEFAULT_USER_ID = os.environ.get("DEFAULT_USER_ID", "dev_user")
 
@@ -119,16 +120,18 @@ class MemoryMiddleware(AgentMiddleware[Any, Any]):
     # Build the combined context block
     # ------------------------------------------------------------------
 
+    _CONTEXT_MARKER = "[User Context]"
+
     def _build_context_block(
         self,
         profile_text: str | None,
         memories: list[dict] | None,
     ) -> str | None:
-        """Merge live datetime + structured profile + soft memories into one text block."""
+        """Merge live date + structured profile + soft memories into one text block."""
         parts: list[str] = []
 
-        # Layer 0 — live datetime (always injected, never stale)
-        parts.append(get_current_datetime_block())
+        # Layer 0 — live date (changes once per day — excellent for caching)
+        parts.append(get_current_date_block())
 
         # Layer 1 — structured profile (always present if profile exists)
         if profile_text:
@@ -149,7 +152,7 @@ class MemoryMiddleware(AgentMiddleware[Any, Any]):
         if not parts:
             return None
 
-        return "\n\n" + "\n".join(parts) + "\n"
+        return "\n".join(parts)
 
     def _load_profile_text(self, user_id: str) -> str | None:
         """Load structured UserProfile and format for injection."""
@@ -164,18 +167,49 @@ class MemoryMiddleware(AgentMiddleware[Any, Any]):
     def _inject_context(
         self, request: ModelRequest, context_block: str
     ) -> ModelRequest:
-        """Insert context as a SEPARATE message, keeping system_message untouched.
+        """Prepend context to the **last HumanMessage**, keeping everything else untouched.
 
         Why: Model providers (DeepSeek, OpenAI, etc.) cache based on the
-        token prefix.  If we modify system_message with per-request data
-        (datetime, profile, memories), the prefix changes every call and
-        the cache hit-rate drops to zero.  By leaving system_message static
-        and prepending the dynamic context as a new message in the messages
-        list, the static system prompt stays a stable, cacheable prefix.
+        token prefix.  The prefix is: static system_prompt → tools → earlier
+        messages.  By injecting dynamic data (date, profile, memories) into
+        the last HumanMessage — the only thing that changes — the entire
+        preceding conversation stays a stable, cacheable prefix.
         """
-        context_msg = SystemMessage(content=context_block.strip())
-        new_messages = [context_msg] + list(request.messages or [])
-        return request.override(messages=new_messages)
+        messages = list(request.messages or [])
+
+        # Find the last HumanMessage
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            if isinstance(msg, HumanMessage):
+                content = msg.content
+                # Guard against double-injection
+                if isinstance(content, str) and self._CONTEXT_MARKER in content:
+                    return request
+                elif isinstance(content, list):
+                    for block in content:
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "text"
+                            and isinstance(block.get("text"), str)
+                            and self._CONTEXT_MARKER in block.get("text", "")
+                        ):
+                            return request
+
+                prefix = f"{self._CONTEXT_MARKER}\n{context_block.strip()}\n---\n"
+                if isinstance(content, str):
+                    new_content = prefix + content
+                elif isinstance(content, list):
+                    # Multimodal: prepend as a text block
+                    new_content = [{"type": "text", "text": prefix}, *content]
+                else:
+                    new_content = prefix + str(content)
+
+                new_msg = HumanMessage(content=new_content)  # type: ignore[arg-type]
+                new_messages = messages[:i] + [new_msg] + messages[i + 1:]
+                return request.override(messages=new_messages)
+
+        # No HumanMessage found — should not happen, but fall back safely
+        return request
 
     # ------------------------------------------------------------------
     # Async wrapper

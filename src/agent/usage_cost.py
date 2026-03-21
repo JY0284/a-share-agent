@@ -197,6 +197,11 @@ def estimate_cost(
         input_cache_hit_cost = (cache_hit / 1_000_000) * per_m.get("input_cache_hit", 0)
         input_cache_miss_cost = (cache_miss / 1_000_000) * per_m.get("input_cache_miss", 0)
         input_cost = input_cache_hit_cost + input_cache_miss_cost
+    elif "input" in per_m:
+        # Flat input rate (no cache breakdown — e.g. vision / OpenAI models)
+        input_cost = (input_tokens / 1_000_000) * per_m["input"]
+        # For reporting, treat all input as cache miss at the flat rate
+        input_cache_miss_cost = input_cost
     else:
         # Conservative: treat all input as cache miss
         input_cost = (input_tokens / 1_000_000) * per_m.get("input_cache_miss", 0)

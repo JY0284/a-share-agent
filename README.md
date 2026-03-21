@@ -202,10 +202,8 @@ a-share-agent/
 | `tool_get_namechange` | Name change history |
 | `tool_get_moneyflow` | Stock money flow data |
 | `tool_get_fx_daily` | Forex daily rates |
-| `tool_get_lpr` | Loan Prime Rate (LPR) |
-| `tool_get_cpi` | Consumer Price Index (CPI) |
-| `tool_get_cn_sf` | Social Financing data |
-| `tool_get_cn_m` | Money Supply data |
+| `tool_get_macro_data` | Macro data: LPR, CPI, social financing, money supply |
+| `tool_trading_calendar` | Trading calendar: is_trading_day, prev/next, range |
 
 ## License
 

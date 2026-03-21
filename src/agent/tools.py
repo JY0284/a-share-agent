@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone, timedelta
+from typing import Literal
 
 from langchain_core.tools import tool
 
@@ -1285,6 +1286,46 @@ def tool_get_cn_m(
     )
 
 
+@tool
+def tool_get_macro_data(
+    indicator: Literal["lpr", "cpi", "social_financing", "money_supply"],
+    date: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict:
+    """Get Chinese macro-economic data. One tool for all macro indicators.
+
+    Args:
+        indicator: Which data series to fetch:
+            - "lpr": 贷款市场报价利率 (Loan Prime Rate). Date format: YYYYMMDD.
+            - "cpi": 居民消费价格指数 (Consumer Price Index). Date format: YYYYMM.
+            - "social_financing": 社会融资 monthly series. Date format: YYYYMM.
+            - "money_supply": 货币供应量 M0/M1/M2. Date format: YYYYMM.
+        date: Specific date/month
+        start_date: Start of range
+        end_date: End of range
+        offset: Skip first N rows
+        limit: Max rows (default 50, max 200)
+    """
+    lim = min(limit or 50, 200)
+    if indicator == "lpr":
+        return get_lpr(date=date, start_date=start_date, end_date=end_date,
+                       offset=offset, limit=lim, store_dir=STORE_DIR)
+    elif indicator == "cpi":
+        return get_cpi(month=date, start_month=start_date, end_month=end_date,
+                       offset=offset, limit=lim, store_dir=STORE_DIR)
+    elif indicator == "social_financing":
+        return get_cn_sf(month=date, start_month=start_date, end_month=end_date,
+                         offset=offset, limit=lim, store_dir=STORE_DIR)
+    elif indicator == "money_supply":
+        return get_cn_m(month=date, start_month=start_date, end_month=end_date,
+                        offset=offset, limit=lim, store_dir=STORE_DIR)
+    else:
+        return {"error": f"Unknown indicator: {indicator}"}
+
+
 # =============================================================================
 # SKILLS TOOLS - For discovering and loading agent skills
 # =============================================================================
@@ -1390,6 +1431,37 @@ def tool_get_next_trade_date(date: str) -> dict:
     Returns: {date, next_trade_date}
     """
     return get_next_trade_date(date, store_dir=STORE_DIR)
+
+
+@tool
+def tool_trading_calendar(
+    action: Literal["is_trading_day", "prev", "next", "range"],
+    date: str,
+    end_date: str | None = None,
+) -> dict:
+    """Trading calendar utility. One tool for all calendar queries.
+
+    Args:
+        action: What to check:
+            - "is_trading_day": Check if date is a trading day.
+            - "prev": Get previous trading day before date.
+            - "next": Get next trading day after date.
+            - "range": Get all trading days between date and end_date.
+        date: Date in YYYYMMDD format (e.g. '20260320').
+        end_date: Required only for action="range". End date YYYYMMDD.
+    """
+    if action == "is_trading_day":
+        return is_trading_day(date, store_dir=STORE_DIR)
+    elif action == "prev":
+        return get_prev_trade_date(date, store_dir=STORE_DIR)
+    elif action == "next":
+        return get_next_trade_date(date, store_dir=STORE_DIR)
+    elif action == "range":
+        if not end_date:
+            return {"error": "end_date is required for action='range'"}
+        return get_trading_days(date, end_date, store_dir=STORE_DIR)
+    else:
+        return {"error": f"Unknown action: {action}"}
 
 
 # =============================================================================
@@ -2257,16 +2329,10 @@ ALL_TOOLS = [
     # Market Extras
     tool_get_moneyflow,
     tool_get_fx_daily,
-    # Macro
-    tool_get_lpr,
-    tool_get_cpi,
-    tool_get_cn_sf,
-    tool_get_cn_m,
-    # Calendar
-    tool_get_trading_days,
-    tool_is_trading_day,
-    tool_get_prev_trade_date,
-    tool_get_next_trade_date,
+    # Macro (consolidated)
+    tool_get_macro_data,
+    # Calendar (consolidated)
+    tool_trading_calendar,
     # Python Execution (for complex analysis only)
     tool_execute_python,
 ]

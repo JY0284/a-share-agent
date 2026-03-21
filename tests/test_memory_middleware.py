@@ -84,10 +84,10 @@ class TestBuildContextBlock:
         assert "fact" in block
 
     def test_empty(self):
-        """With no profile and no memories, block still contains live datetime."""
+        """With no profile and no memories, block still contains live date."""
         block = self.mw._build_context_block(None, [])
         assert block is not None
-        assert "Current Date/Time" in block
+        assert "Current Date" in block
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ class TestBuildContextBlock:
 
 class TestSyncWrapModelCall:
     def test_injects_profile(self):
-        """Verify profile is injected even without mem0."""
+        """Verify profile is injected into last HumanMessage, not as SystemMessage."""
         # Create a profile with holdings
         up.get_or_create_profile("sync_test_user")
         up.update_portfolio(
@@ -110,16 +110,11 @@ class TestSyncWrapModelCall:
         # Build a mock request
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        human_msg = HumanMessage(content="向我汇报")
         request = MagicMock()
         request.runtime = MagicMock()
         request.runtime.config = {"configurable": {"user_id": "sync_test_user"}}
-        request.messages = [HumanMessage(content="向我汇报")]
-        # SystemMessage.content_blocks is a read-only property, so mock it
-        mock_sys_msg = MagicMock()
-        mock_sys_msg.content_blocks = [
-            {"type": "text", "text": "You are a financial analyst."}
-        ]
-        request.system_message = mock_sys_msg
+        request.messages = [human_msg]
 
         captured_request = {}
 
@@ -133,3 +128,45 @@ class TestSyncWrapModelCall:
 
         # The handler should have been called with an overridden request
         assert request.override.called
+
+    def test_context_in_human_message(self):
+        """Verify context block is prepended to HumanMessage content."""
+        mw = mm.MemoryMiddleware()
+
+        from langchain_core.messages import HumanMessage
+
+        human_msg = HumanMessage(content="茅台最新价格")
+        request = MagicMock()
+        request.messages = [human_msg]
+
+        context_block = "## 📅 Current Date\n- Date: 2026-03-20\n"
+
+        result = mw._inject_context(request, context_block)
+
+        # Should call override with modified messages
+        assert request.override.called
+        call_kwargs = request.override.call_args
+        new_messages = call_kwargs.kwargs.get("messages") or call_kwargs[1].get("messages")
+        assert len(new_messages) == 1
+        assert isinstance(new_messages[0], HumanMessage)
+        assert "[User Context]" in new_messages[0].content
+        assert "茅台最新价格" in new_messages[0].content
+
+    def test_no_double_injection(self):
+        """Verify context is not injected twice if marker already present."""
+        mw = mm.MemoryMiddleware()
+
+        from langchain_core.messages import HumanMessage
+
+        # Message already has the context marker
+        human_msg = HumanMessage(content="[User Context]\nsome context\n---\n茅台最新价格")
+        request = MagicMock()
+        request.messages = [human_msg]
+
+        context_block = "## 📅 Current Date\n- Date: 2026-03-20\n"
+
+        result = mw._inject_context(request, context_block)
+
+        # Should return original request without calling override
+        assert result is request
+        assert not request.override.called

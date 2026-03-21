@@ -372,25 +372,41 @@ def clear_skill_cache() -> None:
 
 
 def get_skills_brief(skills_dir: Path | None = None) -> str:
-    """Generate a brief summary of all available skills for system prompt.
+    """Generate a compact category-grouped summary of skills for system prompt.
     
-    This provides the agent with awareness of all skills without loading full content.
-    Should be called once at startup and included in system prompt (static for cache).
-    
-    Returns:
-        Markdown-formatted brief of all skills with name, description, and tags.
+    Groups skills by domain to reduce token count while preserving discoverability.
+    The agent should call `tool_search_and_load_skill(id)` for full content.
     """
     skills = list_skills(skills_dir)
     if not skills:
         return "No skills available."
     
-    lines = []
+    # Group skills by category using tags and naming conventions
+    categories: dict[str, list[str]] = {}
     for skill in sorted(skills, key=lambda s: s.name):
         skill_id = skill.path.parent.name
-        desc = skill.description or "(no description)"
-        tags = ", ".join(skill.tags) if skill.tags else ""
-        tag_part = f" [{tags}]" if tags else ""
-        lines.append(f"- **{skill_id}**: {desc}{tag_part}")
+        # Determine category from skill_id prefix or tags
+        if skill_id.startswith("backtest_"):
+            cat = "Backtest strategies"
+        elif any(t in (skill.tags or []) for t in ["statistics", "regression", "forecast"]):
+            cat = "Statistical analysis"
+        elif skill_id in ("rolling_indicators", "momentum_breakout", "risk_metrics"):
+            cat = "Technical indicators & risk"
+        elif skill_id in ("adj_prices_and_returns", "merge_prices_and_valuation", "valuation_units"):
+            cat = "Prices & valuation"
+        elif skill_id in ("index_data", "index_returns_and_compare", "etf_data", "etf_nav_and_premium"):
+            cat = "Index & ETF data"
+        elif skill_id in ("finance_statements", "finance_statements_metrics"):
+            cat = "Financial statements"
+        elif skill_id in ("multi_stock_compare", "parallel_multi_stock"):
+            cat = "Multi-stock analysis"
+        else:
+            cat = "Utilities"
+        categories.setdefault(cat, []).append(skill_id)
+    
+    lines = []
+    for cat, ids in sorted(categories.items()):
+        lines.append(f"- **{cat}**: {', '.join(ids)}")
     
     return "\n".join(lines)
 

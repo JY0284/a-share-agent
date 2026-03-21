@@ -121,8 +121,8 @@ Chat UI (Next.js :3000) ──► LangGraph Server (:2024) ──► stock_data 
 | Discovery | `tool_list_industries`, `tool_get_universe` | `tools.py` |
 | Simple Data | `tool_get_daily_prices`, `tool_get_daily_basic`, `tool_get_index_daily_prices`, `tool_get_etf_daily_prices`, `tool_get_fund_nav`, `tool_get_income`, `tool_get_balancesheet`, `tool_get_cashflow`, `tool_get_fina_indicator`, `tool_get_dividend` | `tools.py` |
 | Market Extras | `tool_get_moneyflow`, `tool_get_fx_daily` | `tools.py` |
-| Macro | `tool_get_lpr`, `tool_get_cpi`, `tool_get_cn_sf`, `tool_get_cn_m` | `tools.py` |
-| Calendar | `tool_get_trading_days`, `tool_is_trading_day`, `tool_get_prev_trade_date`, `tool_get_next_trade_date` | `tools.py` |
+| Macro | `tool_get_macro_data` (indicator: lpr/cpi/social_financing/money_supply) | `tools.py` |
+| Calendar | `tool_trading_calendar` (action: is_trading_day/prev/next/range) | `tools.py` |
 | Python Execution | `tool_execute_python` | `tools.py` |
 | Batch/Portfolio | `tool_batch_quotes`, `tool_portfolio_live_snapshot`, `tool_market_overview`, `tool_compare_stocks` | `batch_tools.py` |
 | Profile Management | `tool_update_portfolio`, `tool_update_preferences`, `tool_add_watchlist`, `tool_remove_watchlist`, `tool_add_strategy` | `profile_tools.py` |

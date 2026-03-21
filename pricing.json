@@ -16,6 +16,14 @@
         "input_cache_miss": 2,
         "output": 3
       }
+    },
+    "gpt-5.2": {
+      "currency": "RMB",
+      "per_million_tokens": {
+        "input": 4,
+        "output": 16
+      },
+      "_note": "yunwu.ai proxy; ~$2.50/$10.00 USD at 7.2 CNY/USD"
     }
   },
   "default_model": "deepseek-chat"

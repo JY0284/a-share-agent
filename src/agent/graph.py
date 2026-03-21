@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env at import time so that code-reloads (langgraph dev auto-reload)
+# pick up env vars added after the server was started.  The LangGraph CLI
+# only reads .env once at startup; it does NOT re-read on code reload.
+_env_file = Path(__file__).resolve().parents[2] / ".env"
+if _env_file.exists():
+    # Use python-dotenv for robust .env parsing (handles quotes, multiline,
+    # and variable expansion) while preserving the original behavior of
+    # overriding existing environment variables with values from .env.
+    load_dotenv(dotenv_path=_env_file, override=True)
 
 from langchain.agents import create_agent
 from langchain_deepseek import ChatDeepSeek
 
 from agent.prompts import get_system_prompt
 from agent.python_guard_middleware import PythonGuardMiddleware
-from agent.skill_injection_middleware import SkillInjectionMiddleware
 from agent.trace_middleware import LocalTraceMiddleware
 from agent.tools import ALL_TOOLS
 from agent.web_search import WEB_SEARCH_TOOLS, get_tavily_api_key
@@ -18,6 +29,7 @@ from agent.memory_middleware import MemoryMiddleware
 from agent.profile_tools import PROFILE_TOOLS
 from agent.batch_tools import BATCH_TOOLS
 from agent.todo_middleware import InvestmentTodoMiddleware
+from agent.vision_middleware import VisionMiddleware
 
 # Initialize the DeepSeek model
 model = ChatDeepSeek(
@@ -42,10 +54,15 @@ def get_all_tools():
 # Build middleware stack
 def get_middleware():
     middleware = []
-    # Memory middleware first: injects UserProfile + relevant soft memories
+    # Vision middleware first: always present — strips image blocks that
+    # text-only models (DeepSeek) would reject.  When the vision API key is
+    # available it also extracts text from screenshots; otherwise it inserts
+    # a fallback note.  Must NOT be conditional on VISION_ENABLED() here
+    # because the graph is built at import time, before .env is loaded.
+    middleware.append(VisionMiddleware())
+    # Memory middleware: injects UserProfile + relevant soft memories
     middleware.append(MemoryMiddleware())
     middleware.extend([
-        SkillInjectionMiddleware(),  # Inject relevant skill content based on query
         LocalTraceMiddleware(),      # Traces the MODIFIED messages
         PythonGuardMiddleware(),
         InvestmentTodoMiddleware(),
