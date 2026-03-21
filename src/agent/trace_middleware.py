@@ -1,14 +1,26 @@
-"""Agent middleware that writes a local JSONL trace for each run."""
+"""Agent middleware that writes a local JSONL trace for each run.
+
+Trace format: clean **messages** (one JSON object per line), similar to the
+OpenAI chat-completion messages format:
+
+    {"role": "system", "content": "..."}
+    {"role": "user",   "content": [...]}
+    {"role": "assistant", "content": "...", "tool_calls": [...], "model": "...", "usage": {...}, "cost": {...}}
+    {"role": "tool",   "name": "...",  "content": "...", "tool_call_id": "..."}
+    {"role": "assistant", "content": "...", "model": "...", "usage": {...}, "cost": {...}}
+
+Each line is self-contained JSON with a ``ts`` timestamp.
+"""
 
 from __future__ import annotations
 
 import uuid
 from contextvars import ContextVar
 import hashlib
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Sequence, TypeVar
 
 from langchain_core.messages import BaseMessage
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -24,169 +36,183 @@ from agent.usage_cost import compute_usage_and_cost, load_pricing
 TContext = TypeVar("TContext")
 TState = TypeVar("TState")
 
-
-def _tool_calls_preview(msg: BaseMessage) -> list[dict[str, Any]] | None:
-    """Extract tool call info from an AIMessage if present."""
-    if not isinstance(msg, AIMessage):
-        return None
-    tc = getattr(msg, "tool_calls", None)
-    if not tc:
-        return None
-    out: list[dict[str, Any]] = []
-    for c in tc:
-        # tool call dict: {"name":..., "args":..., "id":...}
-        if isinstance(c, dict):
-            out.append(
-                {
-                    "name": c.get("name"),
-                    "args": c.get("args"),
-                    "id": c.get("id"),
-                }
-            )
-        else:
-            out.append({"tool_call": str(c)})
-    return out
+# ---------------------------------------------------------------------------
+# Per-run state: track which messages have already been logged so that
+# repeated model calls (tool-loop iterations) don't duplicate them.
+# ---------------------------------------------------------------------------
+_logged_ids: ContextVar[set | None] = ContextVar("_trace_logged_ids", default=None)
 
 
-def _message_event(msg: BaseMessage, *, direction: str) -> dict[str, Any]:
-    """Represent a single message as a trace event."""
+def _get_logged_ids() -> set:
+    s = _logged_ids.get(None)
+    if s is None:
+        s = set()
+        _logged_ids.set(s)
+    return s
+
+
+# ---------------------------------------------------------------------------
+# Convert LangChain messages → clean trace messages
+# ---------------------------------------------------------------------------
+
+def _truncate(text: str, max_chars: int) -> str:
+    if max_chars > 0 and len(text) > max_chars:
+        return text[:max_chars] + "...(truncated)"
+    return text
+
+
+def _msg_to_trace(msg: BaseMessage, *, max_chars: int = 0) -> dict[str, Any]:
+    """Convert a LangChain message to a clean trace dict with role/content."""
     content = getattr(msg, "content", None)
-    content_str = content if isinstance(content, str) else str(content)
-    ev: dict[str, Any] = {
-        "event": "message",
-        "direction": direction,  # in/out
-        "message_type": msg.__class__.__name__,
-        "content": content_str,
-    }
-    # Keep tool call metadata for AI messages
-    tc = _tool_calls_preview(msg)
-    if tc is not None:
-        ev["tool_calls"] = tc
-    # ToolMessage has tool_call_id
+    content_out: Any
+    if isinstance(content, str):
+        content_out = _truncate(content, max_chars)
+    elif isinstance(content, list):
+        # Multimodal content blocks — keep structure but truncate text blocks
+        out_blocks: list[Any] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                out_blocks.append({**block, "text": _truncate(block.get("text", ""), max_chars)})
+            elif isinstance(block, dict) and block.get("type") in ("image", "image_url"):
+                # Don't dump base64 into the trace; just note it
+                out_blocks.append({"type": "image", "mimeType": block.get("mimeType", "image/*")})
+            elif isinstance(block, str):
+                out_blocks.append(_truncate(block, max_chars))
+            else:
+                out_blocks.append(block)
+        content_out = out_blocks
+    else:
+        content_out = str(content) if content is not None else ""
+
+    # Determine role
+    if isinstance(msg, SystemMessage):
+        role = "system"
+    elif isinstance(msg, HumanMessage):
+        role = "user"
+    elif isinstance(msg, AIMessage):
+        role = "assistant"
+    elif isinstance(msg, ToolMessage):
+        role = "tool"
+    else:
+        role = msg.__class__.__name__.lower().replace("message", "")
+
+    ev: dict[str, Any] = {"role": role, "content": content_out}
+
+    # Tool calls on assistant messages
+    if isinstance(msg, AIMessage):
+        tc = getattr(msg, "tool_calls", None)
+        if tc:
+            ev["tool_calls"] = [
+                {"name": c.get("name"), "args": c.get("args"), "id": c.get("id")}
+                if isinstance(c, dict) else {"tool_call": str(c)}
+                for c in tc
+            ]
+
+    # tool_call_id on ToolMessage
     if isinstance(msg, ToolMessage):
         ev["tool_call_id"] = getattr(msg, "tool_call_id", None)
-    # Usage/cost (if present) for AI messages
-    if isinstance(msg, AIMessage):
-        # Prefer additional_kwargs since that's what gets serialized most reliably
-        ak = getattr(msg, "additional_kwargs", None)
-        if isinstance(ak, dict):
-            if ak.get("usage") is not None:
-                ev["usage"] = ak.get("usage")
-            if ak.get("cost") is not None:
-                ev["cost"] = ak.get("cost")
-        rm = getattr(msg, "response_metadata", None)
-        if isinstance(rm, dict):
-            if "usage" in rm and "usage" not in ev:
-                ev["usage"] = rm.get("usage")
-            if "cost" in rm and "cost" not in ev:
-                ev["cost"] = rm.get("cost")
+        ev["name"] = getattr(msg, "name", None)
+
     return ev
 
 
-def _attach_usage_cost(messages: list[BaseMessage], model_name: str | None) -> dict[str, Any] | None:
-    """Compute per-message usage/cost and attach onto AIMessage.additional_kwargs.
+def _extract_result_messages(resp: Any) -> list[BaseMessage]:
+    """Extract messages from ModelCallResult (ModelResponse | AIMessage)."""
+    if hasattr(resp, "result") and isinstance(resp.result, list):
+        return resp.result
+    if isinstance(resp, BaseMessage):
+        return [resp]
+    return []
 
-    Returns aggregated usage/cost for this model call (or None if no usage found).
+
+def _compute_usage_cost_for_msg(msg: AIMessage, model_name: str | None) -> dict[str, Any]:
+    """Compute usage/cost for a single AIMessage and attach to its kwargs.
+
+    Returns {"usage": {...}, "cost": {...}} or empty dict.
     """
-    total_in = 0
-    total_out = 0
-    total_tokens = 0
-    total_cache_hit = 0
-    total_cache_miss = 0
-    total_reasoning = 0
-    total_cost = 0.0
-    currency: str | None = None
-    has_usage = False
-    has_cost = False
+    info = compute_usage_and_cost(msg, model_name=model_name)
+    usage = info.get("usage")
+    cost = info.get("cost")
+    result: dict[str, Any] = {}
 
-    for m in messages:
+    if usage:
+        result["usage"] = usage
+        # Attach to message objects for billing proxy
+        for attr in ("additional_kwargs", "response_metadata"):
+            container = getattr(msg, attr, None)
+            if not isinstance(container, dict):
+                container = {}
+                try:
+                    setattr(msg, attr, container)
+                except Exception:
+                    continue
+            container["usage"] = usage
+    if cost:
+        result["cost"] = cost
+        for attr in ("additional_kwargs", "response_metadata"):
+            container = getattr(msg, attr, None)
+            if isinstance(container, dict):
+                container["cost"] = cost
+
+    return result
+
+
+def _collect_vision_costs() -> tuple[list[dict], float]:
+    """Consume pending vision costs (from VisionMiddleware) and compute total."""
+    try:
+        from agent.vision_middleware import consume_pending_vision_costs
+    except ImportError:
+        return [], 0.0
+    vision_costs = consume_pending_vision_costs()
+    if not vision_costs:
+        return [], 0.0
+    vision_total = sum(
+        (vc.get("cost") or {}).get("total", 0) for vc in vision_costs
+    )
+    return vision_costs, vision_total
+
+
+def _collect_image_info() -> dict | None:
+    """Consume original image metadata (set by VisionMiddleware before stripping)."""
+    try:
+        from agent.vision_middleware import consume_pending_image_info
+    except ImportError:
+        return None
+    return consume_pending_image_info()
+
+
+def _apply_vision_costs_to_msg(
+    vision_costs: list[dict],
+    vision_total: float,
+    result_messages: list[BaseMessage],
+) -> None:
+    """Attach vision costs to the last AIMessage for billing."""
+    if not vision_costs or vision_total <= 0:
+        return
+    for m in reversed(result_messages):
         if not isinstance(m, AIMessage):
             continue
+        for attr_name in ("additional_kwargs", "response_metadata"):
+            container = getattr(m, attr_name, None)
+            if not isinstance(container, dict):
+                continue
+            if "cost" in container and isinstance(container["cost"], dict):
+                container["cost"]["total"] = round(
+                    float(container["cost"].get("total", 0)) + vision_total, 6
+                )
+            else:
+                container["cost"] = {"currency": "RMB", "total": round(vision_total, 6)}
+        break
 
-        info = compute_usage_and_cost(m, model_name=model_name)
-        usage = info.get("usage")
-        cost = info.get("cost")
 
-        if usage:
-            has_usage = True
-            total_in += int(usage.get("input_tokens", 0) or 0)
-            total_out += int(usage.get("output_tokens", 0) or 0)
-            total_tokens += int(usage.get("total_tokens", 0) or 0)
-            total_cache_hit += int(usage.get("input_cache_hit_tokens", 0) or 0)
-            total_cache_miss += int(usage.get("input_cache_miss_tokens", 0) or 0)
-            total_reasoning += int(usage.get("reasoning_tokens", 0) or 0)
-
-            # Attach to additional_kwargs (preferred for serialization)
-            ak = getattr(m, "additional_kwargs", None)
-            if not isinstance(ak, dict):
-                ak = {}
-                try:
-                    m.additional_kwargs = ak
-                except Exception:
-                    pass
-            if isinstance(ak, dict):
-                ak["usage"] = usage
-
-            # Also attach to response_metadata (best-effort)
-            rm = getattr(m, "response_metadata", None)
-            if not isinstance(rm, dict):
-                rm = {}
-                try:
-                    m.response_metadata = rm
-                except Exception:
-                    pass
-            if isinstance(rm, dict):
-                rm["usage"] = usage
-
-        if cost:
-            has_cost = True
-            currency = str(cost.get("currency") or currency or "USD")
-            total_cost += float(cost.get("total", 0) or 0)
-
-            ak = getattr(m, "additional_kwargs", None)
-            if not isinstance(ak, dict):
-                ak = {}
-                try:
-                    m.additional_kwargs = ak
-                except Exception:
-                    pass
-            if isinstance(ak, dict):
-                ak["cost"] = cost
-
-            rm = getattr(m, "response_metadata", None)
-            if not isinstance(rm, dict):
-                rm = {}
-                try:
-                    m.response_metadata = rm
-                except Exception:
-                    pass
-            if isinstance(rm, dict):
-                rm["cost"] = cost
-
-    if not has_usage:
-        return None
-
-    usage_summary: dict[str, Any] = {
-        "input_tokens": total_in,
-        "output_tokens": total_out,
-        "total_tokens": total_tokens,
-    }
-    if total_cache_hit or total_cache_miss:
-        usage_summary["input_cache_hit_tokens"] = total_cache_hit
-        usage_summary["input_cache_miss_tokens"] = total_cache_miss
-    if total_reasoning:
-        usage_summary["reasoning_tokens"] = total_reasoning
-
-    out: dict[str, Any] = {"usage": usage_summary}
-    if has_cost:
-        out["cost"] = {"currency": currency or "USD", "total": round(total_cost, 6)}
-    return out
-
+# ---------------------------------------------------------------------------
+# Middleware class
+# ---------------------------------------------------------------------------
 
 class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
-    """Log model + tool activity to local JSONL files.
+    """Log model + tool activity as clean messages to local JSONL files.
 
-    Files: a-share-agent/traces/<run_id>.jsonl
+    Trace directory: a-share-agent-traces/<user_name>/<datetime>_<run_id>.jsonl
     """
 
     tools: list[BaseTool] = []
@@ -194,17 +220,22 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
     def __init__(self, *, max_payload_chars: int = 4000) -> None:
         self._writer = get_trace_writer()
         self._max_payload_chars = int(max_payload_chars)
-        # Per-run trace id (ContextVar so it works across model/tool calls in the same run)
         self._trace_id_var: ContextVar[str | None] = ContextVar("agent_trace_id", default=None)
-        # Eagerly warm the pricing cache so awrap_model_call never
-        # triggers synchronous file I/O (which BlockBuster would block).
+        # Track whether system prompt has been logged for this run
+        self._system_logged: ContextVar[set | None] = ContextVar("_trace_system_logged", default=None)
         try:
             load_pricing()
         except Exception:
             pass
 
+    def _get_system_logged(self) -> set:
+        s = self._system_logged.get(None)
+        if s is None:
+            s = set()
+            self._system_logged.set(s)
+        return s
+
     def before_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        """Initialize a per-run trace id as early as possible."""
         try:
             ctx = getattr(runtime, "context", None)
             if isinstance(ctx, dict) and not ctx.get("_trace_id"):
@@ -214,14 +245,12 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         return None
 
     def _trace_id_from_state(self, state: Any) -> str | None:
-        """Try to derive a stable trace id from the agent state/messages."""
         try:
             if not isinstance(state, dict):
                 return None
             msgs = state.get("messages")
             if not isinstance(msgs, list) or not msgs:
                 return None
-            # Prefer the first HumanMessage id (agent-chat-ui assigns UUIDs)
             for m in msgs:
                 if isinstance(m, HumanMessage):
                     mid = getattr(m, "id", None)
@@ -236,22 +265,10 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             return None
 
     def _trace_id(self, runtime: Any, state: Any | None = None) -> str:
-        """Best-effort stable trace id per agent run.
-
-        Priority:
-        1) runtime.config.run_id (if present)
-        1.5) runtime.config.configurable.thread_id / checkpoint_id (if present)
-        2) state-derived id (first human message id/content hash)
-        3) ContextVar trace id (best-effort within task)
-        4) runtime.context._trace_id (we set this on first access)
-        3) generate a UUID and store it in runtime.context
-        """
-        # 2) state-derived id (best for LangGraph where execution may hop tasks)
         if state is not None:
             sid = self._trace_id_from_state(state)
             if sid:
                 self._trace_id_var.set(sid)
-                # stash into runtime.context if possible
                 try:
                     ctx = getattr(runtime, "context", None)
                     if isinstance(ctx, dict):
@@ -260,19 +277,16 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
                     pass
                 return sid
 
-        # 3) ContextVar (best-effort within same task)
         existing_cv = self._trace_id_var.get()
         if existing_cv:
             return existing_cv
 
-        # 1) run_id if present
         config = getattr(runtime, "config", None)
         if isinstance(config, dict) and config.get("run_id"):
             rid = str(config["run_id"])
             self._trace_id_var.set(rid)
             return rid
 
-        # 1.5) use thread_id/checkpoint_id if available (LangGraph server runs)
         if isinstance(config, dict):
             conf = config.get("configurable")
             if isinstance(conf, dict):
@@ -282,7 +296,6 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
                     self._trace_id_var.set(tid_str)
                     return tid_str
 
-        # 2) context stash
         ctx = getattr(runtime, "context", None)
         if isinstance(ctx, dict):
             existing = ctx.get("_trace_id")
@@ -295,36 +308,37 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
             self._trace_id_var.set(new_id)
             return new_id
 
-        # 3) fallback
         new_id = str(uuid.uuid4())
         self._trace_id_var.set(new_id)
         return new_id
 
-    def _get_user_id(self, runtime: Any) -> str | None:
-        """Extract user_id from runtime config.configurable (injected by chat-ui proxy).
+    def _get_user_display_name(self, runtime: Any) -> str | None:
+        """Extract a human-readable user identifier for trace directories.
 
-        Falls back to runtime.context.user_id (same strategy as memory_middleware).
+        Priority: user_name > user_email > user_id (UUID fallback).
         """
-        # 1) Try runtime.config.configurable.user_id
         try:
             config = getattr(runtime, "config", None)
             if isinstance(config, dict):
                 configurable = config.get("configurable", {})
                 if isinstance(configurable, dict):
+                    # Prefer human-readable name
+                    name = configurable.get("user_name")
+                    if name:
+                        return str(name)
+                    email = configurable.get("user_email")
+                    if email:
+                        return str(email)
                     uid = configurable.get("user_id")
                     if uid:
                         return str(uid)
         except Exception:
             pass
-        # 2) Fallback: try runtime.context.user_id
+        # Fallback: runtime.context
         try:
             ctx = getattr(runtime, "context", None)
             if isinstance(ctx, dict):
                 uid = ctx.get("user_id")
-                if uid:
-                    return str(uid)
-            if ctx and hasattr(ctx, "user_id"):
-                uid = getattr(ctx, "user_id", None)
                 if uid:
                     return str(uid)
         except Exception:
@@ -332,103 +346,115 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         return None
 
     def _get_thread_id(self, runtime: Any) -> str | None:
-        """Extract the actual LangGraph thread_id from runtime config."""
         config = getattr(runtime, "config", None)
         if config is None:
-            print(f"[DEBUG] _get_thread_id: runtime has no config attr")
             return None
-        
-        # config could be a dict or a TypedDict/object
         if isinstance(config, dict):
             conf = config.get("configurable")
         else:
             conf = getattr(config, "configurable", None)
-        
         if conf is None:
-            print(f"[DEBUG] _get_thread_id: config has no configurable, config type={type(config)}, config={config}")
             return None
-        
-        # configurable could be a dict or object
         if isinstance(conf, dict):
             tid = conf.get("thread_id")
         else:
             tid = getattr(conf, "thread_id", None)
-        
-        if tid:
-            print(f"[DEBUG] _get_thread_id: found thread_id={tid}")
-            return str(tid)
-        else:
-            keys = list(conf.keys()) if isinstance(conf, dict) else [a for a in dir(conf) if not a.startswith('_')]
-            print(f"[DEBUG] _get_thread_id: configurable has no thread_id, keys={keys}")
-        return None
+        return str(tid) if tid else None
+
+    # ------------------------------------------------------------------
+    # Setup helpers (shared by sync/async)
+    # ------------------------------------------------------------------
+
+    def _setup_run(self, runtime: Any, state: Any | None) -> str:
+        """Common run setup: derive IDs, register user, return run_id."""
+        run_id = self._trace_id(runtime, state=state)
+        set_python_session_id(run_id)
+        actual_thread_id = self._get_thread_id(runtime)
+        if actual_thread_id:
+            set_thread_id(actual_thread_id)
+        user_display = self._get_user_display_name(runtime)
+        if user_display:
+            self._writer.set_user_for_run(run_id, user_display)
+        return run_id
+
+    # ------------------------------------------------------------------
+    # Log new input messages (avoiding duplicates across agent-loop iters)
+    # ------------------------------------------------------------------
+
+    def _log_new_input_messages(self, run_id: str, messages: Sequence[BaseMessage] | None, *, sync: bool = True) -> list:
+        """Log any input messages not yet logged. Returns async coroutines if sync=False."""
+        if not messages:
+            return []
+        logged = _get_logged_ids()
+        system_logged = self._get_system_logged()
+        # Collect image info once (consumed per model call)
+        image_info = _collect_image_info()
+        coros = []
+        for msg in messages:
+            msg_id = id(msg)
+            if msg_id in logged:
+                continue
+            logged.add(msg_id)
+
+            # Log system messages (the system prompt)
+            if isinstance(msg, SystemMessage):
+                if run_id not in system_logged:
+                    system_logged.add(run_id)
+                    ev = _msg_to_trace(msg, max_chars=0)  # full system prompt
+                    if sync:
+                        self._writer.write_event(run_id, ev)
+                    else:
+                        coros.append(self._writer.awrite_event(run_id, ev))
+                continue
+
+            ev = _msg_to_trace(msg, max_chars=self._max_payload_chars)
+            # Attach original image info to user messages (images already stripped by VisionMiddleware)
+            if isinstance(msg, HumanMessage) and image_info:
+                ev["original_images"] = image_info
+                image_info = None  # Only attach once
+            if sync:
+                self._writer.write_event(run_id, ev)
+            else:
+                coros.append(self._writer.awrite_event(run_id, ev))
+        return coros
+
+    # ------------------------------------------------------------------
+    # Model call wrappers
+    # ------------------------------------------------------------------
 
     def wrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ):
-        run_id = self._trace_id(request.runtime, state=getattr(request, "state", None))
-        set_python_session_id(run_id)
-        
-        # Set the actual thread_id for figure storage (separate from trace_id)
-        actual_thread_id = self._get_thread_id(request.runtime)
-        if actual_thread_id:
-            set_thread_id(actual_thread_id)
-        
-        # Associate user_id with this run for per-user trace directories
-        user_id = self._get_user_id(request.runtime)
-        if user_id:
-            self._writer.set_user_for_run(run_id, user_id)
-        
-        try:
-            # Log the latest inbound message (usually HumanMessage or ToolMessage)
-            if request.messages:
-                self._writer.write_event(
-                    run_id,
-                    _message_event(request.messages[-1], direction="in"),
-                )
+        run_id = self._setup_run(request.runtime, getattr(request, "state", None))
+        model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
 
-            self._writer.write_event(
-                run_id,
-                {
-                    "event": "model_start",
-                    "model": getattr(request.model, "model", None) or request.model.__class__.__name__,
-                    "tool_count": len(request.tools or []),
-                    "message_count": len(request.messages) if request.messages else 0,
-                },
-            )
+        try:
+            self._log_new_input_messages(run_id, request.messages, sync=True)
         except Exception:
-            # tracing should never break the agent
             pass
 
         resp = handler(request)
+        result_messages = _extract_result_messages(resp)
 
-        # --- Log AI messages FIRST (must not be blocked by cost errors) ---
+        # Log assistant messages with embedded usage/cost
         try:
-            for m in resp.result:
-                self._writer.write_event(run_id, _message_event(m, direction="out"))
-        except Exception:
-            pass
+            vision_costs, vision_total = _collect_vision_costs()
+            _apply_vision_costs_to_msg(vision_costs, vision_total, result_messages)
 
-        # --- Then try usage/cost (best-effort, failures won't lose messages) ---
-        try:
-            model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
-            agg = _attach_usage_cost(resp.result, model_name=model_name)
-
-            model_end: dict[str, Any] = {
-                "event": "model_end",
-                "result_count": len(resp.result) if resp.result else 0,
-            }
-            if agg:
-                model_end.update(agg)
-            self._writer.write_event(run_id, model_end)
+            for m in result_messages:
+                ev = _msg_to_trace(m, max_chars=self._max_payload_chars)
+                if isinstance(m, AIMessage):
+                    ev["model"] = model_name or m.__class__.__name__
+                    uc = _compute_usage_cost_for_msg(m, model_name)
+                    ev.update(uc)
+                    if vision_costs:
+                        ev["vision"] = vision_costs
+                self._writer.write_event(run_id, ev)
+                _get_logged_ids().add(id(m))
         except Exception as exc:
-            # Still write a minimal model_end so the trace has a closing event
-            print(f"[trace] cost computation failed: {type(exc).__name__}: {exc}")
-            try:
-                self._writer.write_event(run_id, {"event": "model_end", "error": f"cost_computation_failed: {exc}"})
-            except Exception:
-                pass
+            print(f"[trace] message logging failed: {type(exc).__name__}: {exc}")
 
         return resp
 
@@ -437,134 +463,73 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Any],
     ) -> ModelResponse:
-        """Async version of wrap_model_call for async agent execution contexts."""
-        run_id = self._trace_id(request.runtime, state=getattr(request, "state", None))
-        set_python_session_id(run_id)
-        
-        # Set the actual thread_id for figure storage (separate from trace_id)
-        actual_thread_id = self._get_thread_id(request.runtime)
-        if actual_thread_id:
-            set_thread_id(actual_thread_id)
-        
-        # Associate user_id with this run for per-user trace directories
-        user_id = self._get_user_id(request.runtime)
-        if user_id:
-            self._writer.set_user_for_run(run_id, user_id)
-        
+        run_id = self._setup_run(request.runtime, getattr(request, "state", None))
+        model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
+
         try:
-            if request.messages:
-                await self._writer.awrite_event(
-                    run_id,
-                    _message_event(request.messages[-1], direction="in"),
-                )
-            await self._writer.awrite_event(
-                run_id,
-                {
-                    "event": "model_start",
-                    "model": getattr(request.model, "model", None) or request.model.__class__.__name__,
-                    "tool_count": len(request.tools or []),
-                    "message_count": len(request.messages) if request.messages else 0,
-                },
-            )
+            coros = self._log_new_input_messages(run_id, request.messages, sync=False)
+            for c in coros:
+                await c
         except Exception:
             pass
 
         resp = await handler(request)
+        result_messages = _extract_result_messages(resp)
 
-        # --- Log AI messages FIRST (must not be blocked by cost errors) ---
         try:
-            for m in resp.result:
-                await self._writer.awrite_event(run_id, _message_event(m, direction="out"))
-        except Exception:
-            pass
+            vision_costs, vision_total = _collect_vision_costs()
+            _apply_vision_costs_to_msg(vision_costs, vision_total, result_messages)
 
-        # --- Then try usage/cost (best-effort, failures won't lose messages) ---
-        try:
-            model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
-            agg = _attach_usage_cost(resp.result, model_name=model_name)
-
-            model_end: dict[str, Any] = {
-                "event": "model_end",
-                "result_count": len(resp.result) if resp.result else 0,
-            }
-            if agg:
-                model_end.update(agg)
-            await self._writer.awrite_event(run_id, model_end)
+            for m in result_messages:
+                ev = _msg_to_trace(m, max_chars=self._max_payload_chars)
+                if isinstance(m, AIMessage):
+                    ev["model"] = model_name or m.__class__.__name__
+                    uc = _compute_usage_cost_for_msg(m, model_name)
+                    ev.update(uc)
+                    if vision_costs:
+                        ev["vision"] = vision_costs
+                await self._writer.awrite_event(run_id, ev)
+                _get_logged_ids().add(id(m))
         except Exception as exc:
-            print(f"[trace] cost computation failed: {type(exc).__name__}: {exc}")
-            try:
-                await self._writer.awrite_event(run_id, {"event": "model_end", "error": f"cost_computation_failed: {exc}"})
-            except Exception:
-                pass
+            print(f"[trace] async message logging failed: {type(exc).__name__}: {exc}")
 
         return resp
+
+    # ------------------------------------------------------------------
+    # Tool call wrappers
+    # ------------------------------------------------------------------
 
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ):
-        # ToolRuntime is from langgraph; includes config/tool_call_id
         runtime = getattr(request, "runtime", None)
-        run_id = self._trace_id(runtime, state=getattr(request, "state", None))
-        set_python_session_id(run_id)
-        
-        # Set the actual thread_id for figure storage (separate from trace_id)
-        actual_thread_id = self._get_thread_id(runtime)
-        if actual_thread_id:
-            set_thread_id(actual_thread_id)
-        
-        # Associate user_id with this run for per-user trace directories
-        user_id = self._get_user_id(runtime)
-        if user_id:
-            self._writer.set_user_for_run(run_id, user_id)
-        
-        tool_call = request.tool_call or {}
-        name = tool_call.get("name")
-        args = tool_call.get("args")
-        tool_call_id = tool_call.get("id") or getattr(runtime, "tool_call_id", None)
-
-        try:
-            self._writer.write_event(
-                run_id,
-                {
-                    "event": "tool_start",
-                    "tool_name": name,
-                    "tool_call_id": tool_call_id,
-                    "args": args,
-                },
-            )
-        except Exception:
-            pass
+        run_id = self._setup_run(runtime, getattr(request, "state", None))
 
         result = handler(request)
 
-        # Tool result is typically a ToolMessage; store a compact preview
+        # Log tool result as a clean message
         try:
+            tool_call = request.tool_call or {}
+            name = tool_call.get("name")
+            tool_call_id = tool_call.get("id") or getattr(runtime, "tool_call_id", None)
+
             content = getattr(result, "content", result)
             content_str = content if isinstance(content, str) else str(content)
-            if len(content_str) > self._max_payload_chars:
-                content_str = content_str[: self._max_payload_chars] + "..."
+            content_str = _truncate(content_str, self._max_payload_chars)
 
-            self._writer.write_event(
-                run_id,
-                {
-                    "event": "tool_end",
-                    "tool_name": name,
-                    "tool_call_id": tool_call_id,
-                    "result_preview": content_str,
-                },
-            )
-
-            # Also record the tool message as a message event (so message stream is complete)
+            ev: dict[str, Any] = {
+                "role": "tool",
+                "name": name,
+                "tool_call_id": tool_call_id,
+                "content": content_str,
+            }
+            self._writer.write_event(run_id, ev)
             if isinstance(result, ToolMessage):
-                # Use truncated content to avoid huge files
-                msg_ev = _message_event(result, direction="out")
-                if isinstance(msg_ev.get("content"), str) and len(msg_ev["content"]) > self._max_payload_chars:
-                    msg_ev["content"] = msg_ev["content"][: self._max_payload_chars] + "..."
-                self._writer.write_event(run_id, msg_ev)
-        except Exception:
-            pass
+                _get_logged_ids().add(id(result))
+        except Exception as exc:
+            print(f"[trace] tool logging failed: {type(exc).__name__}: {exc}")
 
         return result
 
@@ -573,64 +538,31 @@ class LocalTraceMiddleware(AgentMiddleware[Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> Any:
-        """Async version of wrap_tool_call for async agent execution contexts."""
         runtime = getattr(request, "runtime", None)
-        run_id = self._trace_id(runtime, state=getattr(request, "state", None))
-        set_python_session_id(run_id)
-        
-        # Set the actual thread_id for figure storage (separate from trace_id)
-        actual_thread_id = self._get_thread_id(runtime)
-        if actual_thread_id:
-            set_thread_id(actual_thread_id)
-        
-        # Associate user_id with this run for per-user trace directories
-        user_id = self._get_user_id(runtime)
-        if user_id:
-            self._writer.set_user_for_run(run_id, user_id)
-        
-        tool_call = request.tool_call or {}
-        name = tool_call.get("name")
-        args = tool_call.get("args")
-        tool_call_id = tool_call.get("id") or getattr(runtime, "tool_call_id", None)
-
-        try:
-            await self._writer.awrite_event(
-                run_id,
-                {
-                    "event": "tool_start",
-                    "tool_name": name,
-                    "tool_call_id": tool_call_id,
-                    "args": args,
-                },
-            )
-        except Exception:
-            pass
+        run_id = self._setup_run(runtime, getattr(request, "state", None))
 
         result = await handler(request)
 
         try:
+            tool_call = request.tool_call or {}
+            name = tool_call.get("name")
+            tool_call_id = tool_call.get("id") or getattr(runtime, "tool_call_id", None)
+
             content = getattr(result, "content", result)
             content_str = content if isinstance(content, str) else str(content)
-            if len(content_str) > self._max_payload_chars:
-                content_str = content_str[: self._max_payload_chars] + "..."
+            content_str = _truncate(content_str, self._max_payload_chars)
 
-            await self._writer.awrite_event(
-                run_id,
-                {
-                    "event": "tool_end",
-                    "tool_name": name,
-                    "tool_call_id": tool_call_id,
-                    "result_preview": content_str,
-                },
-            )
-
+            ev: dict[str, Any] = {
+                "role": "tool",
+                "name": name,
+                "tool_call_id": tool_call_id,
+                "content": content_str,
+            }
+            await self._writer.awrite_event(run_id, ev)
             if isinstance(result, ToolMessage):
-                msg_ev = _message_event(result, direction="out")
-                if isinstance(msg_ev.get("content"), str) and len(msg_ev["content"]) > self._max_payload_chars:
-                    msg_ev["content"] = msg_ev["content"][: self._max_payload_chars] + "..."
-                await self._writer.awrite_event(run_id, msg_ev)
-        except Exception:
-            pass
+                _get_logged_ids().add(id(result))
+        except Exception as exc:
+            print(f"[trace] async tool logging failed: {type(exc).__name__}: {exc}")
 
         return result
 

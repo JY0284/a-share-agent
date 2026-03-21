@@ -5,9 +5,9 @@ Goal:
 - Keep it simple and dependency-free.
 
 Implementation:
-- A middleware logs model calls + tool calls as JSONL (one event per line)
-- Files are saved under: a-share-agent-traces/<user_id>/<datetime>_<run_id>.jsonl
-- Anonymous runs (no user_id) go to: a-share-agent-traces/_anonymous/...
+- A middleware logs conversation messages as JSONL (one message per line)
+- Files are saved under: a-share-agent-traces/<user_name>/<datetime>_<run_id>.jsonl
+- Anonymous runs go to: a-share-agent-traces/_anonymous/...
 
 Note:
   ``langgraph dev`` enables BlockBuster which **blocks** synchronous I/O
@@ -48,26 +48,24 @@ class TraceWriter:
     def __post_init__(self) -> None:
         self.trace_dir.mkdir(parents=True, exist_ok=True)
 
-    def set_user_for_run(self, run_id: str, user_id: str) -> None:
-        """Associate a user_id with a run so traces go into per-user dirs.
+    def set_user_for_run(self, run_id: str, user_display: str) -> None:
+        """Associate a display name with a run so traces go into per-user dirs.
+
+        ``user_display`` should be a human-readable name (e.g. "yu") or email
+        (e.g. "249582269@qq.com").  Falls back to UUID if neither is available.
 
         Must be called before the first ``path_for_run`` / ``write_event``
-        for that run_id.  If the path was already created, this is a no-op
-        (we keep the first mapping to avoid mid-run directory changes).
+        for that run_id.  If the path was already created, this is a no-op.
         """
         if run_id not in self._run_user_ids:
-            self._run_user_ids[run_id] = user_id
+            self._run_user_ids[run_id] = user_display
 
     def path_for_run(self, run_id: str) -> Path:
         """Return (and cache) the trace file path for a run.
 
-        If a user_id was registered via ``set_user_for_run``, the trace file
-        is placed under ``<trace_dir>/<user_id>/<datetime>_<run_id>.jsonl``.
+        If a user display name was registered via ``set_user_for_run``,
+        the trace file is placed under ``<trace_dir>/<name>/<datetime>_<run_id>.jsonl``.
         Otherwise it falls back to ``<trace_dir>/_anonymous/...``.
-
-        The first call creates a datetime-prefixed filename so traces sort
-        chronologically.  Subsequent calls for the same run_id return the
-        same path so the datetime doesn't shift mid-run.
         """
         if run_id in self._run_paths:
             return self._run_paths[run_id]
