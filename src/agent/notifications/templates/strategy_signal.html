@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}🎯 策略信号{% endblock %}
+{% block subtitle %}Strategy Signal &middot; {{ created_at }}{% endblock %}
+
+{% block content %}
+{% set signal_type = payload.get("signal_type", "ENTRY") %}
+<div style="text-align: center; margin: 10px 0 20px;">
+  <span class="signal-badge {{ 'signal-entry' if signal_type == 'ENTRY' else 'signal-exit' }}">
+    {{ "买入信号 / BUY" if signal_type == "ENTRY" else "卖出信号 / SELL" }}
+  </span>
+</div>
+
+<div class="card">
+  <div class="metric">
+    <div class="label">股票</div>
+    <div class="value">{{ payload.get("ts_code", "") }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">策略</div>
+    <div class="value">{{ payload.get("strategy", "") }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">收盘价</div>
+    <div class="value">{{ "%.2f"|format(payload.get("close", 0)) }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">日涨跌</div>
+    <div class="value {{ 'up' if payload.get('pct_chg', 0) >= 0 else 'down' }}">
+      {{ "%+.2f%%"|format(payload.get("pct_chg", 0)) }}
+    </div>
+  </div>
+  <div class="metric">
+    <div class="label">日期</div>
+    <div class="value">{{ payload.get("trade_date", "") }}</div>
+  </div>
+</div>
+
+{% set params = payload.get("params", {}) %}
+{% if params %}
+<h3 style="margin: 16px 0 8px;">策略参数</h3>
+<div class="card">
+  {% for key, val in params.items() %}
+  <div class="metric">
+    <div class="label">{{ key }}</div>
+    <div class="value">{{ val }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<p style="margin-top: 16px; font-size: 12px; color: #888;">
+  ⚠️ 此信号仅供参考，不构成投资建议。请结合自身分析做出决策。
+  <br>This signal is for reference only and does not constitute investment advice.
+</p>
+{% endblock %}

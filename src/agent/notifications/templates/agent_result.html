@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}🤖 分析报告{% endblock %}
+{% block subtitle %}Agent Analysis &middot; {{ created_at }}{% endblock %}
+
+{% block content %}
+{% if payload.get("thread_id") %}
+<div style="font-size: 12px; color: #888; margin-bottom: 12px;">
+  Thread: {{ payload.get("thread_id", "") }}
+</div>
+{% endif %}
+
+{% if payload.get("final_message") %}
+<div class="card">
+  <div style="font-size: 14px; line-height: 1.6; white-space: pre-wrap;">{{ payload["final_message"].get("content", "") }}</div>
+</div>
+{% endif %}
+
+{% if payload.get("summary") %}
+<div class="card">
+  <h3 style="margin: 0 0 8px;">摘要</h3>
+  <div style="font-size: 14px; line-height: 1.6;">{{ payload.get("summary", "") }}</div>
+</div>
+{% endif %}
+
+{% if payload.get("usage") %}
+<div style="margin-top: 16px; font-size: 12px; color: #888;">
+  {% set usage = payload.get("usage", {}) %}
+  Token usage: {{ usage.get("total_tokens", "") }} &middot;
+  Cost: ${{ "%.4f"|format(usage.get("total_cost", 0)) }}
+</div>
+{% endif %}
+{% endblock %}

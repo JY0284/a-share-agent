@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { margin: 0; padding: 0; background: #f4f6f9; font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #333; }
+  .container { max-width: 640px; margin: 20px auto; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #fff; padding: 24px 28px; }
+  .header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+  .header .sub { margin-top: 6px; font-size: 13px; opacity: 0.75; }
+  .body { padding: 24px 28px; }
+  .footer { padding: 16px 28px; background: #f8f9fa; font-size: 12px; color: #888; text-align: center; border-top: 1px solid #eee; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { padding: 8px 10px; text-align: left; font-size: 13px; }
+  th { background: #f0f2f5; font-weight: 600; border-bottom: 2px solid #dee2e6; }
+  td { border-bottom: 1px solid #eee; }
+  .up { color: #e53935; }
+  .down { color: #43a047; }
+  .tag { display: inline-block; background: #e3f2fd; color: #1565c0; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 1px 2px; }
+  .card { background: #f8f9fa; border-radius: 6px; padding: 14px 16px; margin: 10px 0; }
+  .metric { display: inline-block; min-width: 100px; margin: 4px 12px 4px 0; }
+  .metric .label { font-size: 11px; color: #888; }
+  .metric .value { font-size: 16px; font-weight: 600; }
+  .signal-badge { display: inline-block; padding: 4px 14px; border-radius: 4px; font-weight: 700; font-size: 14px; letter-spacing: 1px; }
+  .signal-entry { background: #ffebee; color: #c62828; }
+  .signal-exit { background: #e8f5e9; color: #2e7d32; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>{% block title %}Spiderman Quant{% endblock %}</h1>
+    <div class="sub">{% block subtitle %}{{ created_at }}{% endblock %}</div>
+  </div>
+  <div class="body">
+    {% block content %}
+    <p>No content available.</p>
+    {% endblock %}
+  </div>
+  <div class="footer">
+    Spiderman Notification System &middot; Powered by stock_data + a-share-agent
+  </div>
+</div>
+</body>
+</html>

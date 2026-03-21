@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}⚡ 自选股提醒{% endblock %}
+{% block subtitle %}Watchlist Alert &middot; {{ created_at }}{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="metric">
+    <div class="label">股票</div>
+    <div class="value">{{ payload.get("name", "") }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">代码</div>
+    <div class="value">{{ payload.get("ts_code", "") }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">收盘价</div>
+    <div class="value">{{ "%.2f"|format(payload.get("close", 0)) }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">日涨跌</div>
+    <div class="value {{ 'up' if payload.get('pct_chg', 0) >= 0 else 'down' }}">
+      {{ "%+.2f%%"|format(payload.get("pct_chg", 0)) }}
+    </div>
+  </div>
+  <div class="metric">
+    <div class="label">日期</div>
+    <div class="value">{{ payload.get("trade_date", "") }}</div>
+  </div>
+</div>
+
+{% set alerts = payload.get("alerts", []) %}
+{% if alerts %}
+<h3 style="margin: 16px 0 8px;">触发条件</h3>
+<ul style="padding-left: 20px;">
+  {% for alert in alerts %}
+  <li style="margin: 4px 0; font-size: 14px;">{{ alert }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if payload.get("reason") %}
+<div class="card" style="margin-top: 12px;">
+  <div class="label">关注原因</div>
+  <div style="margin-top: 4px; font-size: 13px;">{{ payload.get("reason", "") }}</div>
+</div>
+{% endif %}
+{% endblock %}

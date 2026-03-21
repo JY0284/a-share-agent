@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}📊 投资组合日报{% endblock %}
+{% block subtitle %}Portfolio Report &middot; {{ created_at }}{% endblock %}
+
+{% block content %}
+{% set summary = payload.get("portfolio_summary", {}) %}
+<div class="card">
+  <div class="metric">
+    <div class="label">持仓市值</div>
+    <div class="value">¥{{ "{:,.0f}".format(summary.get("live_market_value", 0)) }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">现金</div>
+    <div class="value">¥{{ "{:,.0f}".format(summary.get("cash", 0)) }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">累计盈亏</div>
+    <div class="value {{ 'up' if summary.get('total_pnl', 0) >= 0 else 'down' }}">
+      ¥{{ "{:,.0f}".format(summary.get("total_pnl", 0)) }}
+    </div>
+  </div>
+  <div class="metric">
+    <div class="label">持仓数</div>
+    <div class="value">{{ summary.get("holding_count", 0) }}</div>
+  </div>
+</div>
+
+{% if payload.get("holdings_live") %}
+<h3 style="margin: 16px 0 8px;">持仓明细</h3>
+<table>
+  <thead>
+    <tr>
+      <th>名称</th>
+      <th>现价</th>
+      <th>日涨跌</th>
+      <th>成本盈亏</th>
+      <th>市值</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in payload.get("holdings_live", []) %}
+    <tr>
+      <td>
+        <strong>{{ h.get("name", "") }}</strong>
+        <br><span style="color:#888;font-size:11px;">{{ h.get("ts_code", "") }}</span>
+      </td>
+      <td>{{ "%.2f"|format(h.get("live_price", 0)) }}</td>
+      <td class="{{ 'up' if h.get('day_chg_pct', 0) >= 0 else 'down' }}">
+        {{ "%+.2f%%"|format(h.get("day_chg_pct", 0)) }}
+      </td>
+      <td class="{{ 'up' if h.get('cost_pnl_pct', 0) >= 0 else 'down' }}">
+        {{ "%+.2f%%"|format(h.get("cost_pnl_pct", 0) * 100) }}
+      </td>
+      <td>¥{{ "{:,.0f}".format(h.get("live_value", 0)) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if payload.get("indices") %}
+<h3 style="margin: 16px 0 8px;">大盘指数</h3>
+<table>
+  <thead>
+    <tr><th>指数</th><th>收盘</th><th>涨跌幅</th></tr>
+  </thead>
+  <tbody>
+    {% for idx in payload.get("indices", []) %}
+    <tr>
+      <td>{{ idx.get("name", "") }}</td>
+      <td>{{ "%.2f"|format(idx.get("close", 0)) }}</td>
+      <td class="{{ 'up' if idx.get('pct_chg', 0) >= 0 else 'down' }}">
+        {{ "%+.2f%%"|format(idx.get("pct_chg", 0)) }}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

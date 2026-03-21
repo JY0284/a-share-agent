@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}📈 市场速递{% endblock %}
+{% block subtitle %}Market Digest &middot; {{ created_at }}{% endblock %}
+
+{% block content %}
+{% if payload.get("indices") %}
+<h3 style="margin: 0 0 10px;">大盘指数</h3>
+<table>
+  <thead>
+    <tr><th>指数</th><th>收盘</th><th>涨跌幅</th><th>日期</th></tr>
+  </thead>
+  <tbody>
+    {% for idx in payload.get("indices", []) %}
+    <tr>
+      <td><strong>{{ idx.get("name", "") }}</strong></td>
+      <td>{{ "%.2f"|format(idx.get("close", 0)) }}</td>
+      <td class="{{ 'up' if idx.get('pct_chg', 0) >= 0 else 'down' }}">
+        {{ "%+.2f%%"|format(idx.get("pct_chg", 0)) }}
+      </td>
+      <td style="color:#888;font-size:12px;">{{ idx.get("trade_date", "") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if payload.get("fx") %}
+<div class="card">
+  <h3 style="margin: 0 0 6px;">外汇</h3>
+  <div class="metric">
+    <div class="label">{{ payload["fx"].get("pair", "USDCNH") }}</div>
+    <div class="value">{{ "%.4f"|format(payload["fx"].get("close", 0)) }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">涨跌</div>
+    <div class="value {{ 'up' if payload['fx'].get('pct_chg', 0) >= 0 else 'down' }}">
+      {{ "%+.2f%%"|format(payload["fx"].get("pct_chg", 0)) }}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% set macro = payload.get("macro", {}) %}
+{% if macro %}
+<h3 style="margin: 16px 0 8px;">宏观指标</h3>
+
+{% if macro.get("lpr_latest") %}
+<div class="card">
+  <strong>LPR利率</strong> ({{ macro["lpr_latest"].get("date", "") }})
+  <div style="margin-top: 6px;">
+    <div class="metric">
+      <div class="label">1年期</div>
+      <div class="value">{{ macro["lpr_latest"].get("lpr_1y", "-") }}%</div>
+    </div>
+    <div class="metric">
+      <div class="label">5年期</div>
+      <div class="value">{{ macro["lpr_latest"].get("lpr_5y", "-") }}%</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if macro.get("cpi_latest") %}
+<div class="card">
+  <strong>CPI</strong> ({{ macro["cpi_latest"].get("month", "") }})
+  <div style="margin-top: 6px;">
+    <div class="metric">
+      <div class="label">同比</div>
+      <div class="value">{{ macro["cpi_latest"].get("nt_yoy", "-") }}%</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if macro.get("money_supply_latest") %}
+<div class="card">
+  <strong>货币供应</strong> ({{ macro["money_supply_latest"].get("month", "") }})
+  <div style="margin-top: 6px;">
+    <div class="metric">
+      <div class="label">M2同比</div>
+      <div class="value">{{ macro["money_supply_latest"].get("m2_yoy", "-") }}%</div>
+    </div>
+    <div class="metric">
+      <div class="label">M1同比</div>
+      <div class="value">{{ macro["money_supply_latest"].get("m1_yoy", "-") }}%</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

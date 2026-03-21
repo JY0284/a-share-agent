@@ -14,12 +14,13 @@ dependencies = [
     "matplotlib>=3.8.0",
     "seaborn>=0.13.2",
     "stock-data",
+    "spiderman",
     "scipy>=1.17.0",
     "langchain-tavily>=0.1.0",
     "statsmodels>=0.14.0",
     "arch>=7.0.0",
     "mem0ai>=0.1.0",
-"openai>=1.0.0",
+    "openai>=1.0.0",
 ]
 
 [build-system]
@@ -41,3 +42,4 @@ pythonpath = ["src"]
 
 [tool.uv.sources]
 stock-data = { path = "../stock_data", editable = true }
+spiderman = { path = "../spiderman", editable = true }
